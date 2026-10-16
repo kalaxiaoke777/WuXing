@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.time.LocalDate
 
 data class MealReading(
     val score: Int,
@@ -33,31 +34,127 @@ data class MealEntry(
     val balance: Int,
     val foods: List<String>,
     val usedModel: Boolean,
+    val kcal: Int = 0,
+)
+
+data class MoveEntry(
+    val id: String,
+    val epoch: Long,
+    val kind: String,
+    val amount: Int,
+    val kcal: Int,
+)
+
+data class NightLog(
+    val hoursTenth: Int,
+    val wakes: Int,
+)
+
+data class Vow(
+    val id: String,
+    val title: String,
+    val spanDays: Int,
+    val anchor: String,
+    val marks: Map<String, Boolean>,
+)
+
+data class Branch(
+    val id: String,
+    val phase: String,
+    val title: String,
+    val weekly: Int,
 )
 
 data class RitualState(
+    val heightCm: Int = 170,
+    val weightTenth: Int = 650,
+    val fatTenth: Int = 0,
+    val age: Int = 28,
+    val male: Boolean = true,
+    val bmrManual: Int = 0,
+    val season: String = "keep",
+    val stepGoal: Int = 8000,
+    val sleepGoalTenth: Int = 70,
+    val noteWhenThink: Boolean = true,
     val waterGoalMl: Int = 2000,
-    val strengthGoal: Int = 4,
-    val sleepHour: Int = 23,
-    val sleepMinute: Int = 30,
     val mealGoal: Int = 3,
-    val moodGoal: Int = 1,
     val mondayWeek: Boolean = true,
     val name: String = "",
     val waterByDay: Map<String, Int> = emptyMap(),
-    val sleepByDay: Map<String, Int> = emptyMap(),
-    val moodsByDay: Map<String, List<Int>> = emptyMap(),
     val mealsByDay: Map<String, List<MealEntry>> = emptyMap(),
-    val strengthEpochs: List<Long> = emptyList(),
+    val movesByDay: Map<String, List<MoveEntry>> = emptyMap(),
+    val nightsByDay: Map<String, NightLog> = emptyMap(),
+    val moodsByDay: Map<String, List<Int>> = emptyMap(),
+    val fireNotes: Map<String, String> = emptyMap(),
+    val fireTended: Set<String> = emptySet(),
+    val vows: List<Vow> = defaultVows(),
     val branches: List<Branch> = emptyList(),
     val branchEpochs: Map<String, List<Long>> = emptyMap(),
     val notice: String = "",
+)
+
+fun defaultVows(day: String = todayKey()): List<Vow> = listOf(
+    Vow("lust", "色欲", 21, day, emptyMap()),
+    Vow("greed", "贪财", 21, day, emptyMap()),
 )
 
 class RitualStore(context: Context) {
     private val prefs = context.getSharedPreferences("cheng.rituals", Context.MODE_PRIVATE)
     private val _state = MutableStateFlow(load())
     val state: StateFlow<RitualState> = _state.asStateFlow()
+
+    fun setHeight(cm: Int) {
+        val value = cm.coerceIn(140, 220)
+        update(_state.value.copy(heightCm = value, notice = "身高改为 $value cm"))
+    }
+
+    fun setWeight(tenth: Int) {
+        val value = tenth.coerceIn(350, 2000)
+        update(_state.value.copy(weightTenth = value, notice = "体重改为 ${tenthText(value)} kg"))
+    }
+
+    fun setFat(tenth: Int) {
+        val value = when {
+            tenth <= 0 -> 0
+            else -> tenth.coerceIn(50, 600)
+        }
+        val note = if (value == 0) "体脂改为未填" else "体脂改为 ${tenthText(value)}%"
+        update(_state.value.copy(fatTenth = value, notice = note))
+    }
+
+    fun setAge(years: Int) {
+        val value = years.coerceIn(14, 80)
+        update(_state.value.copy(age = value, notice = "年龄改为 $value"))
+    }
+
+    fun setMale(male: Boolean) {
+        update(_state.value.copy(male = male, notice = if (male) "按男性估算代谢" else "按女性估算代谢"))
+    }
+
+    fun setBmrManual(kcal: Int) {
+        val value = if (kcal <= 0) 0 else kcal.coerceIn(900, 4000)
+        val note = if (value == 0) "基础代谢改回估算" else "基础代谢改为 $value kcal"
+        update(_state.value.copy(bmrManual = value, notice = note))
+    }
+
+    fun setSeason(key: String) {
+        val season = if (key == "cut" || key == "gain") key else "keep"
+        update(_state.value.copy(season = season, notice = "饮食阶段改为${seasonLabel(season)}"))
+    }
+
+    fun setStepGoal(steps: Int) {
+        val goal = steps.coerceIn(2000, 30000)
+        update(_state.value.copy(stepGoal = goal, notice = "每日步数改为 $goal"))
+    }
+
+    fun setSleepGoal(tenth: Int) {
+        val goal = tenth.coerceIn(60, 100)
+        update(_state.value.copy(sleepGoalTenth = goal, notice = "睡眠改为 ${tenthText(goal)} 小时"))
+    }
+
+    fun setNoteWhenThink(on: Boolean) {
+        update(_state.value.copy(noteWhenThink = on, notice = if (on) "思虑时写下那一句" else "思虑时不必写"))
+    }
 
     fun addWater(delta: Int) {
         val day = todayKey()
@@ -68,43 +165,108 @@ class RitualStore(context: Context) {
     }
 
     fun setWaterGoal(ml: Int) {
-        update(_state.value.copy(waterGoalMl = ml.coerceIn(500, 5000), notice = "饮水目标改为 $ml ml"))
+        val goal = ml.coerceIn(500, 5000)
+        update(_state.value.copy(waterGoalMl = goal, notice = "饮水目标改为 $goal ml"))
     }
 
-    fun addStrength() {
-        val now = System.currentTimeMillis()
+    fun setMealGoal(count: Int) {
+        val goal = count.coerceIn(1, 5)
+        update(_state.value.copy(mealGoal = goal, notice = "每日餐数改为 $goal"))
+    }
+
+    fun logMove(kind: String, amount: Int) {
         val cur = _state.value
-        val horizon = now - 90L * 24 * 3600 * 1000
-        val pruned = cur.strengthEpochs.filter { it >= horizon } + now
-        update(cur.copy(strengthEpochs = pruned, notice = "已记下一次运动"))
+        val size = amount.coerceAtLeast(1)
+        val kcal = moveKcal(kind, size, weightKg(cur))
+        val entry = MoveEntry(
+            id = System.currentTimeMillis().toString(),
+            epoch = System.currentTimeMillis(),
+            kind = kind,
+            amount = size,
+            kcal = kcal,
+        )
+        val day = todayKey()
+        val prior = cur.movesByDay[day].orEmpty()
+        val kept = if (kind == "steps") prior.filterNot { it.kind == "steps" } + entry else (prior + entry).takeLast(12)
+        update(cur.copy(movesByDay = cur.movesByDay + (day to kept), notice = "记下${moveLabel(kind)} · $kcal kcal"))
     }
 
-    fun undoStrength() {
+    fun undoMove(id: String) {
         val cur = _state.value
-        val last = cur.strengthEpochs.filter { inThisWeek(it, cur.mondayWeek) }.maxOrNull() ?: return
-        update(cur.copy(strengthEpochs = cur.strengthEpochs - last, notice = "已撤回最近一次运动"))
+        val day = todayKey()
+        val list = cur.movesByDay[day].orEmpty()
+        if (list.none { it.id == id }) return
+        update(cur.copy(movesByDay = cur.movesByDay + (day to list.filterNot { it.id == id }), notice = "已撤回这项运动"))
     }
 
-    fun setStrengthGoal(count: Int) {
-        val goal = count.coerceIn(1, 7)
-        update(_state.value.copy(strengthGoal = goal, notice = "每周运动改为 $goal 次"))
+    fun logNight(hoursTenth: Int, wakes: Int) {
+        val cur = _state.value
+        val hours = hoursTenth.coerceIn(0, 140)
+        val count = wakes.coerceIn(0, 12)
+        val note = when {
+            hours + 2 < cur.sleepGoalTenth -> "不够 ${tenthText(cur.sleepGoalTenth)} 小时"
+            count >= 3 -> "时长够，起来了 $count 次"
+            else -> "昨夜收住了"
+        }
+        val night = NightLog(hours, count)
+        update(cur.copy(nightsByDay = cur.nightsByDay + (todayKey() to night), notice = note))
     }
 
-    fun setSleep(hour: Int, minute: Int) {
+    fun markMood(code: Int) {
+        val day = todayKey()
+        val cur = _state.value
+        val list = (cur.moodsByDay[day].orEmpty() + code.coerceIn(0, fireMarks.lastIndex)).takeLast(6)
+        val name = fireMarks[list.last()]
+        update(cur.copy(moodsByDay = cur.moodsByDay + (day to list), notice = "观火 · $name"))
+    }
+
+    fun undoMood() {
+        val day = todayKey()
+        val cur = _state.value
+        val list = cur.moodsByDay[day].orEmpty()
+        if (list.isEmpty()) return
+        update(cur.copy(moodsByDay = cur.moodsByDay + (day to list.dropLast(1)), notice = "已撤回最近一次观火"))
+    }
+
+    fun setFireNote(value: String) {
+        val day = todayKey()
+        val cur = _state.value
+        update(cur.copy(fireNotes = cur.fireNotes + (day to value.trim().take(40))))
+    }
+
+    fun tendFire() {
+        val day = todayKey()
+        val cur = _state.value
+        update(cur.copy(fireTended = cur.fireTended + day, notice = "照做过了"))
+    }
+
+    fun markVow(id: String, kept: Boolean) {
+        val day = todayKey()
+        val cur = _state.value
+        val vow = cur.vows.find { it.id == id } ?: return
+        val next = if (kept) {
+            val anchor = if (vow.anchor.isBlank() || vow.anchor > day) day else vow.anchor
+            vow.copy(anchor = anchor, marks = vow.marks + (day to true))
+        } else {
+            vow.copy(
+                anchor = LocalDate.now().plusDays(1).toString(),
+                marks = vow.marks + (day to false),
+            )
+        }
+        val note = if (kept) "守住${vow.title}" else "${vow.title}破了，明日起重新计"
+        update(cur.copy(vows = cur.vows.map { if (it.id == id) next else it }, notice = note))
+    }
+
+    fun setVowSpan(id: String, days: Int) {
+        val span = days.coerceIn(1, 180)
+        val cur = _state.value
+        val vow = cur.vows.find { it.id == id } ?: return
         update(
-            _state.value.copy(
-                sleepHour = hour.mod(24),
-                sleepMinute = minute.coerceIn(0, 59),
-                notice = "入眠约定改为 ${clock(hour.mod(24), minute.coerceIn(0, 59))}",
+            cur.copy(
+                vows = cur.vows.map { if (it.id == id) it.copy(spanDays = span) else it },
+                notice = "${vow.title}的期限改为 $span 天",
             ),
         )
-    }
-
-    fun checkSleep(minuteOfDay: Int = java.time.LocalTime.now().let { it.hour * 60 + it.minute }) {
-        val cur = _state.value
-        val target = cur.sleepHour * 60 + cur.sleepMinute
-        val note = if (onTime(minuteOfDay, target)) "准点入眠" else "已记下，偏离约定"
-        update(cur.copy(sleepByDay = cur.sleepByDay + (todayKey() to minuteOfDay), notice = note))
     }
 
     fun addMeal(path: String, reading: MealReading): String {
@@ -130,6 +292,40 @@ class RitualStore(context: Context) {
         return id
     }
 
+    fun addIntake(kcal: Int) {
+        val amount = kcal.coerceIn(50, 2500)
+        val id = System.currentTimeMillis().toString()
+        val entry = MealEntry(
+            id = id,
+            epoch = System.currentTimeMillis(),
+            imagePath = "",
+            score = 0,
+            title = "补记",
+            commentary = "热量先记在这里。模型接上之后，可以从照片估。",
+            produce = 0,
+            variety = 0,
+            fresh = 0,
+            balance = 0,
+            foods = emptyList(),
+            usedModel = false,
+            kcal = amount,
+        )
+        val cur = _state.value
+        val day = todayKey()
+        val kept = ((cur.mealsByDay[day] ?: emptyList()) + entry).takeLast(20)
+        update(cur.copy(mealsByDay = cur.mealsByDay + (day to kept), notice = "补记 $amount kcal"))
+    }
+
+    fun setMealKcal(id: String, kcal: Int) {
+        val cur = _state.value
+        val day = todayKey()
+        val list = cur.mealsByDay[day].orEmpty()
+        if (list.none { it.id == id }) return
+        val amount = kcal.coerceIn(0, 4000)
+        val next = list.map { if (it.id == id) it.copy(kcal = amount) else it }
+        update(cur.copy(mealsByDay = cur.mealsByDay + (day to next), notice = "这餐热量改为 $amount kcal"))
+    }
+
     fun removeMeal(id: String) {
         val cur = _state.value
         val day = todayKey()
@@ -141,33 +337,7 @@ class RitualStore(context: Context) {
                 notice = "已撤下这餐",
             ),
         )
-        File(target.imagePath).delete()
-    }
-
-    fun setMealGoal(count: Int) {
-        val goal = count.coerceIn(1, 5)
-        update(_state.value.copy(mealGoal = goal, notice = "每日饮食改为 $goal 餐"))
-    }
-
-    fun setMoodGoal(count: Int) {
-        val goal = count.coerceIn(1, 3)
-        update(_state.value.copy(moodGoal = goal, notice = "每日情绪改为 $goal 次"))
-    }
-
-    fun markMood(code: Int) {
-        val day = todayKey()
-        val cur = _state.value
-        val list = (cur.moodsByDay[day].orEmpty() + code.coerceIn(0, moodMarks.lastIndex)).takeLast(6)
-        val name = moodMarks[list.last()]
-        update(cur.copy(moodsByDay = cur.moodsByDay + (day to list), notice = "记下此刻的火 · $name"))
-    }
-
-    fun undoMood() {
-        val day = todayKey()
-        val cur = _state.value
-        val list = cur.moodsByDay[day].orEmpty()
-        if (list.isEmpty()) return
-        update(cur.copy(moodsByDay = cur.moodsByDay + (day to list.dropLast(1)), notice = "已撤回最近一次情绪"))
+        if (target.imagePath.isNotBlank()) File(target.imagePath).delete()
     }
 
     fun setName(value: String) {
@@ -237,25 +407,95 @@ class RitualStore(context: Context) {
 
     private fun RitualState.toJson(): String {
         val root = JSONObject()
+        root.put("schema", 2)
+        root.put("height", heightCm)
+        root.put("weight", weightTenth)
+        root.put("fat", fatTenth)
+        root.put("age", age)
+        root.put("male", male)
+        root.put("bmr", bmrManual)
+        root.put("season", season)
+        root.put("stepGoal", stepGoal)
+        root.put("sleepGoal", sleepGoalTenth)
+        root.put("thinkNote", noteWhenThink)
         root.put("waterGoal", waterGoalMl)
-        root.put("strengthGoal", strengthGoal)
-        root.put("sleepH", sleepHour)
-        root.put("sleepM", sleepMinute)
         root.put("mealGoal", mealGoal)
-        root.put("moodGoal", moodGoal)
         root.put("weekMonday", mondayWeek)
         root.put("name", name)
-        val water = JSONObject()
-        waterByDay.forEach { (k, v) -> water.put(k, v) }
-        root.put("water", water)
-        val sleep = JSONObject()
-        sleepByDay.forEach { (k, v) -> sleep.put(k, v) }
-        root.put("sleep", sleep)
-        val moods = JSONObject()
-        moodsByDay.forEach { (day, list) -> moods.put(day, JSONArray(list)) }
-        root.put("moods", moods)
+        root.put("water", waterByDay.toJsonInts())
+        root.put("meals", mealsByDay.toJsonMeals())
+        root.put("moves", movesByDay.toJsonMoves())
+        root.put("nights", nightsByDay.toJsonNights())
+        root.put("moods", moodsByDay.toJsonMoods())
+        root.put("fireNotes", fireNotes.toJsonStrings())
+        root.put("fireTended", JSONArray(fireTended.toList()))
+        root.put("vows", vows.toVowJson())
+        root.put("branches", branches.toBranchJson())
+        val marks = JSONObject()
+        branchEpochs.forEach { (id, list) -> marks.put(id, JSONArray(list)) }
+        root.put("branchMarks", marks)
+        return root.toString()
+    }
+
+    private fun parse(raw: String): RitualState {
+        val root = JSONObject(raw)
+        val schema = root.optInt("schema", 1)
+        return RitualState(
+            heightCm = root.optInt("height", 170).coerceIn(140, 220),
+            weightTenth = root.optInt("weight", 650).coerceIn(350, 2000),
+            fatTenth = root.optInt("fat", 0).let { if (it in 1..49) 50 else it.coerceIn(0, 600) },
+            age = root.optInt("age", 28).coerceIn(14, 80),
+            male = root.optBoolean("male", true),
+            bmrManual = root.optInt("bmr", 0).let { if (it <= 0) 0 else it.coerceIn(900, 4000) },
+            season = root.optString("season", "keep").let { if (it == "cut" || it == "gain") it else "keep" },
+            stepGoal = root.optInt("stepGoal", 8000).coerceIn(2000, 30000),
+            sleepGoalTenth = root.optInt("sleepGoal", 70).coerceIn(60, 100),
+            noteWhenThink = root.optBoolean("thinkNote", true),
+            waterGoalMl = root.optInt("waterGoal", 2000).coerceIn(500, 5000),
+            mealGoal = root.optInt("mealGoal", 3).coerceIn(1, 5),
+            mondayWeek = root.optBoolean("weekMonday", true),
+            name = root.optString("name").take(12),
+            waterByDay = root.optJSONObject("water").toIntMap(),
+            mealsByDay = parseMeals(root.optJSONObject("meals")),
+            movesByDay = parseMoves(root.optJSONObject("moves")),
+            nightsByDay = parseNights(root.optJSONObject("nights")),
+            moodsByDay = parseMoods(root.optJSONObject("moods"), schema),
+            fireNotes = root.optJSONObject("fireNotes").toStringMap(),
+            fireTended = parseStrings(root.optJSONArray("fireTended")).toSet(),
+            vows = ensureVows(parseVows(root.optJSONArray("vows"))),
+            branches = parseBranches(root.optJSONArray("branches")),
+            branchEpochs = parseBranchMarks(root.optJSONObject("branchMarks")),
+        )
+    }
+
+    private fun ensureVows(parsed: List<Vow>): List<Vow> {
+        val known = parsed.associateBy { it.id }
+        val builtins = defaultVows().map { seed -> known[seed.id] ?: seed }
+        val extra = parsed.filter { it.id != "lust" && it.id != "greed" }
+        return builtins + extra
+    }
+
+    private fun Map<String, Int>.toJsonInts(): JSONObject {
+        val obj = JSONObject()
+        forEach { (key, value) -> obj.put(key, value) }
+        return obj
+    }
+
+    private fun Map<String, String>.toJsonStrings(): JSONObject {
+        val obj = JSONObject()
+        forEach { (key, value) -> obj.put(key, value) }
+        return obj
+    }
+
+    private fun Map<String, List<Int>>.toJsonMoods(): JSONObject {
+        val obj = JSONObject()
+        forEach { (day, list) -> obj.put(day, JSONArray(list)) }
+        return obj
+    }
+
+    private fun Map<String, List<MealEntry>>.toJsonMeals(): JSONObject {
         val meals = JSONObject()
-        mealsByDay.forEach { (day, list) ->
+        forEach { (day, list) ->
             val arr = JSONArray()
             list.forEach { meal ->
                 arr.put(
@@ -271,17 +511,72 @@ class RitualStore(context: Context) {
                         put("fresh", meal.fresh)
                         put("balance", meal.balance)
                         put("model", meal.usedModel)
+                        put("kcal", meal.kcal)
                         put("foods", JSONArray(meal.foods))
                     },
                 )
             }
             meals.put(day, arr)
         }
-        root.put("meals", meals)
-        root.put("strength", JSONArray(strengthEpochs))
-        val branchesJson = JSONArray()
-        branches.forEach { branch ->
-            branchesJson.put(
+        return meals
+    }
+
+    private fun Map<String, List<MoveEntry>>.toJsonMoves(): JSONObject {
+        val obj = JSONObject()
+        forEach { (day, list) ->
+            val arr = JSONArray()
+            list.forEach { move ->
+                arr.put(
+                    JSONObject().apply {
+                        put("id", move.id)
+                        put("epoch", move.epoch)
+                        put("kind", move.kind)
+                        put("amount", move.amount)
+                        put("kcal", move.kcal)
+                    },
+                )
+            }
+            obj.put(day, arr)
+        }
+        return obj
+    }
+
+    private fun Map<String, NightLog>.toJsonNights(): JSONObject {
+        val obj = JSONObject()
+        forEach { (day, night) ->
+            obj.put(
+                day,
+                JSONObject().apply {
+                    put("hours", night.hoursTenth)
+                    put("wakes", night.wakes)
+                },
+            )
+        }
+        return obj
+    }
+
+    private fun List<Vow>.toVowJson(): JSONArray {
+        val arr = JSONArray()
+        forEach { vow ->
+            val marks = JSONObject()
+            vow.marks.forEach { (day, kept) -> marks.put(day, kept) }
+            arr.put(
+                JSONObject().apply {
+                    put("id", vow.id)
+                    put("title", vow.title)
+                    put("span", vow.spanDays)
+                    put("anchor", vow.anchor)
+                    put("marks", marks)
+                },
+            )
+        }
+        return arr
+    }
+
+    private fun List<Branch>.toBranchJson(): JSONArray {
+        val arr = JSONArray()
+        forEach { branch ->
+            arr.put(
                 JSONObject().apply {
                     put("id", branch.id)
                     put("phase", branch.phase)
@@ -290,32 +585,7 @@ class RitualStore(context: Context) {
                 },
             )
         }
-        root.put("branches", branchesJson)
-        val marks = JSONObject()
-        branchEpochs.forEach { (id, list) -> marks.put(id, JSONArray(list)) }
-        root.put("branchMarks", marks)
-        return root.toString()
-    }
-
-    private fun parse(raw: String): RitualState {
-        val root = JSONObject(raw)
-        return RitualState(
-            waterGoalMl = root.optInt("waterGoal", 2000).coerceIn(500, 5000),
-            strengthGoal = root.optInt("strengthGoal", 4).coerceIn(1, 7),
-            sleepHour = root.optInt("sleepH", 23).mod(24),
-            sleepMinute = root.optInt("sleepM", 30).coerceIn(0, 59),
-            mealGoal = root.optInt("mealGoal", 3).coerceIn(1, 5),
-            moodGoal = root.optInt("moodGoal", 1).coerceIn(1, 3),
-            mondayWeek = root.optBoolean("weekMonday", true),
-            name = root.optString("name").take(12),
-            waterByDay = root.optJSONObject("water").toIntMap(),
-            sleepByDay = root.optJSONObject("sleep").toIntMap(),
-            moodsByDay = parseMoods(root.optJSONObject("moods")),
-            mealsByDay = parseMeals(root.optJSONObject("meals")),
-            strengthEpochs = parseLongs(root.optJSONArray("strength")),
-            branches = parseBranches(root.optJSONArray("branches")),
-            branchEpochs = parseBranchMarks(root.optJSONObject("branchMarks")),
-        )
+        return arr
     }
 
     private fun parseMeals(obj: JSONObject?): Map<String, List<MealEntry>> {
@@ -325,7 +595,7 @@ class RitualStore(context: Context) {
         while (keys.hasNext()) {
             val day = keys.next()
             val arr = obj.optJSONArray(day) ?: continue
-            val list = buildList {
+            out[day] = buildList {
                 for (i in 0 until arr.length()) {
                     val item = arr.optJSONObject(i) ?: continue
                     val foodsJson = item.optJSONArray("foods")
@@ -348,16 +618,58 @@ class RitualStore(context: Context) {
                             balance = item.optInt("balance"),
                             foods = foods,
                             usedModel = item.optBoolean("model"),
+                            kcal = item.optInt("kcal"),
                         ),
                     )
                 }
             }
-            out[day] = list
         }
         return out
     }
 
-    private fun parseMoods(obj: JSONObject?): Map<String, List<Int>> {
+    private fun parseMoves(obj: JSONObject?): Map<String, List<MoveEntry>> {
+        if (obj == null) return emptyMap()
+        val out = linkedMapOf<String, List<MoveEntry>>()
+        val keys = obj.keys()
+        while (keys.hasNext()) {
+            val day = keys.next()
+            val arr = obj.optJSONArray(day) ?: continue
+            out[day] = buildList {
+                for (i in 0 until arr.length()) {
+                    val item = arr.optJSONObject(i) ?: continue
+                    val kind = item.optString("kind")
+                    if (kind != "lift" && kind != "cardio" && kind != "steps") continue
+                    add(
+                        MoveEntry(
+                            id = item.optString("id", "$day-$i"),
+                            epoch = item.optLong("epoch"),
+                            kind = kind,
+                            amount = item.optInt("amount"),
+                            kcal = item.optInt("kcal"),
+                        ),
+                    )
+                }
+            }
+        }
+        return out
+    }
+
+    private fun parseNights(obj: JSONObject?): Map<String, NightLog> {
+        if (obj == null) return emptyMap()
+        val out = linkedMapOf<String, NightLog>()
+        val keys = obj.keys()
+        while (keys.hasNext()) {
+            val day = keys.next()
+            val item = obj.optJSONObject(day) ?: continue
+            out[day] = NightLog(
+                hoursTenth = item.optInt("hours").coerceIn(0, 140),
+                wakes = item.optInt("wakes").coerceIn(0, 12),
+            )
+        }
+        return out
+    }
+
+    private fun parseMoods(obj: JSONObject?, schema: Int): Map<String, List<Int>> {
         if (obj == null) return emptyMap()
         val out = linkedMapOf<String, List<Int>>()
         val keys = obj.keys()
@@ -365,10 +677,34 @@ class RitualStore(context: Context) {
             val day = keys.next()
             val arr = obj.optJSONArray(day) ?: continue
             out[day] = buildList {
-                for (i in 0 until arr.length()) add(arr.optInt(i).coerceIn(0, moodMarks.lastIndex))
+                for (i in 0 until arr.length()) {
+                    val raw = arr.optInt(i)
+                    val code = if (schema < 2 && raw == 0) 1 else raw
+                    add(code.coerceIn(0, fireMarks.lastIndex))
+                }
             }
         }
         return out
+    }
+
+    private fun parseVows(arr: JSONArray?): List<Vow> {
+        if (arr == null) return emptyList()
+        return buildList {
+            for (i in 0 until arr.length()) {
+                val item = arr.optJSONObject(i) ?: continue
+                val title = item.optString("title").trim()
+                if (title.isEmpty()) continue
+                add(
+                    Vow(
+                        id = item.optString("id", "v$i"),
+                        title = title.take(8),
+                        spanDays = item.optInt("span", 21).coerceIn(1, 180),
+                        anchor = item.optString("anchor"),
+                        marks = item.optJSONObject("marks").toBoolMap(),
+                    ),
+                )
+            }
+        }
     }
 
     private fun parseBranches(arr: JSONArray?): List<Branch> {
@@ -408,6 +744,13 @@ class RitualStore(context: Context) {
         }
     }
 
+    private fun parseStrings(arr: JSONArray?): List<String> {
+        if (arr == null) return emptyList()
+        return buildList {
+            for (i in 0 until arr.length()) add(arr.optString(i))
+        }.filter { it.isNotBlank() }
+    }
+
     private fun JSONObject?.toIntMap(): Map<String, Int> {
         if (this == null) return emptyMap()
         val out = linkedMapOf<String, Int>()
@@ -415,6 +758,28 @@ class RitualStore(context: Context) {
         while (keys.hasNext()) {
             val key = keys.next()
             out[key] = optInt(key)
+        }
+        return out
+    }
+
+    private fun JSONObject?.toStringMap(): Map<String, String> {
+        if (this == null) return emptyMap()
+        val out = linkedMapOf<String, String>()
+        val keys = keys()
+        while (keys.hasNext()) {
+            val key = keys.next()
+            out[key] = optString(key).take(40)
+        }
+        return out
+    }
+
+    private fun JSONObject?.toBoolMap(): Map<String, Boolean> {
+        if (this == null) return emptyMap()
+        val out = linkedMapOf<String, Boolean>()
+        val keys = keys()
+        while (keys.hasNext()) {
+            val key = keys.next()
+            out[key] = optBoolean(key)
         }
         return out
     }

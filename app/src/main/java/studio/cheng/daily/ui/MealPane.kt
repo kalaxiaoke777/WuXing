@@ -6,6 +6,7 @@ import android.graphics.Bitmap
 import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -30,12 +31,20 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -52,7 +61,14 @@ import studio.cheng.daily.data.MealEntry
 import studio.cheng.daily.data.Phase
 import studio.cheng.daily.data.RitualState
 import studio.cheng.daily.data.RitualStore
+import studio.cheng.daily.data.bmr
+import studio.cheng.daily.data.dayBurn
+import studio.cheng.daily.data.dayIntake
+import studio.cheng.daily.data.energyLine
+import studio.cheng.daily.data.intakeTarget
+import studio.cheng.daily.data.seasonLabel
 import studio.cheng.daily.data.todayKey
+import kotlin.math.sin
 import studio.cheng.daily.vision.MealVision
 import studio.cheng.daily.vision.copyUri
 import studio.cheng.daily.vision.decodeOriented
@@ -73,6 +89,8 @@ fun MealPane(state: RitualState, store: RitualStore) {
     var selected by remember { mutableStateOf<String?>(null) }
     val meals = state.mealsByDay[todayKey()].orEmpty()
     val current = meals.find { it.id == selected } ?: meals.lastOrNull()
+    var draft by remember { mutableIntStateOf(300) }
+    val ml = state.waterByDay[todayKey()] ?: 0
     val shot = remember {
         File(File(context.cacheDir, "camera").apply { mkdirs() }, "shot.jpg")
     }
@@ -153,7 +171,15 @@ fun MealPane(state: RitualState, store: RitualStore) {
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 22.dp, vertical = 8.dp),
     ) {
-        PaneHeader("饮食", if (busy) "在读" else "这一餐", state.notice)
+        val intake = dayIntake(state)
+        PaneHeader("饮食", if (busy) "在读" else if (intake > 0) "$intake kcal" else "三餐与饮水", state.notice)
+        InkText(energyLine(state), modifier = Modifier.padding(top = 8.dp), size = 13.sp, color = Ink.bronze)
+        InkText(
+            "${seasonLabel(state.season)}建议 ${intakeTarget(state)} kcal · 代谢 ${bmr(state)} · 运动 ${dayBurn(state)}",
+            modifier = Modifier.padding(top = 4.dp),
+            size = 12.sp,
+            color = Ink.faint,
+        )
         if (meals.isNotEmpty()) {
             Row(
                 Modifier
@@ -171,6 +197,21 @@ fun MealPane(state: RitualState, store: RitualStore) {
                 MealPhoto(meal.imagePath)
             }
             Slip(meal)
+            InkText("这餐热量", modifier = Modifier.padding(top = 12.dp), size = 12.sp, color = Ink.muted)
+            Stepper(
+                value = if (meal.kcal == 0) "未估" else "${meal.kcal} kcal",
+                onMinus = { store.setMealKcal(meal.id, meal.kcal - 50) },
+                onPlus = { store.setMealKcal(meal.id, if (meal.kcal == 0) 200 else meal.kcal + 50) },
+                minusDesc = "降低这餐热量",
+                plusDesc = "提高这餐热量",
+                modifier = Modifier.padding(top = 6.dp),
+            )
+            InkText(
+                "照片估热量以后交给模型，现在先手填。",
+                modifier = Modifier.padding(top = 4.dp),
+                size = 12.sp,
+                color = Ink.faint,
+            )
             Seal("撤下这一餐", "撤下这一餐", { store.removeMeal(meal.id) }, Modifier.padding(top = 8.dp))
         } ?: EmptySlip()
         error?.let {
@@ -180,10 +221,34 @@ fun MealPane(state: RitualState, store: RitualStore) {
             Seal("拍摄", "拍摄这一餐", { shoot() }, accent = true, enabled = !busy)
             Seal("相册", "从相册选一餐", { gallery.launch("image/*") }, enabled = !busy)
         }
-        Row(Modifier.padding(top = 8.dp, bottom = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Seal("清淡样张", "用清淡样张", { sample(false) }, enabled = !busy)
             Seal("偏重样张", "用偏重样张", { sample(true) }, enabled = !busy)
         }
+        InkText("补记热量", modifier = Modifier.padding(top = 16.dp), size = 12.sp, color = Ink.muted, spacing = 3.sp)
+        Stepper(
+            value = "$draft kcal",
+            onMinus = { draft = (draft - 50).coerceAtLeast(50) },
+            onPlus = { draft = (draft + 50).coerceAtMost(2000) },
+            minusDesc = "降低补记热量",
+            plusDesc = "提高补记热量",
+            modifier = Modifier.padding(top = 8.dp),
+        )
+        Seal("记入", "补记热量", { store.addIntake(draft) }, Modifier.padding(top = 8.dp), accent = true)
+        InkText("饮水", modifier = Modifier.padding(top = 18.dp), size = 12.sp, color = Ink.muted, spacing = 3.sp)
+        Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            WaterCup(ml / state.waterGoalMl.toFloat(), Modifier.size(92.dp, 132.dp))
+            Column(Modifier.padding(start = 16.dp)) {
+                InkText("$ml", size = 36.sp, display = true)
+                InkText("/ ${state.waterGoalMl} ml", size = 13.sp, color = Ink.muted)
+            }
+        }
+        Row(Modifier.padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Seal("+200", "加上200毫升", { store.addWater(200) })
+            Seal("+350", "加上350毫升", { store.addWater(350) })
+            Seal("+500", "加上500毫升", { store.addWater(500) })
+        }
+        Seal("回退 200", "减少200毫升", { store.addWater(-200) }, Modifier.padding(top = 8.dp))
         BranchRail(Phase.Earth, state, store)
     }
 }
@@ -241,9 +306,14 @@ private fun Slip(meal: MealEntry) {
                 .padding(horizontal = 20.dp, vertical = 16.dp),
         ) {
             Row(verticalAlignment = Alignment.Bottom) {
-                InkText(meal.title, size = 32.sp, color = Ink.paperInk, display = true)
+                InkText(if (meal.title == "补记") "${meal.kcal}" else meal.title, size = 32.sp, color = Ink.paperInk, display = true)
                 Spacer(Modifier.weight(1f))
-                InkText("${meal.score}", size = 56.sp, color = Ink.paperInk, display = true)
+                InkText(
+                    if (meal.title == "补记") "kcal" else "${meal.score}",
+                    size = if (meal.title == "补记") 16.sp else 56.sp,
+                    color = if (meal.title == "补记") Ink.paperFaint else Ink.paperInk,
+                    display = meal.title != "补记",
+                )
             }
             if (meal.foods.isNotEmpty()) {
                 InkText(
@@ -341,6 +411,46 @@ private fun MealThumb(path: String, selected: Boolean, onClick: () -> Unit) {
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
             )
+        } else {
+            Box(Modifier.fillMaxSize().background(Ink.paper), contentAlignment = Alignment.Center) {
+                InkText("记", size = 16.sp, color = Ink.paperInk, display = true)
+            }
         }
+    }
+}
+
+@Composable
+private fun WaterCup(level: Float, modifier: Modifier = Modifier) {
+    Canvas(modifier) {
+        val cx = size.width / 2f
+        val rx = size.width * 0.34f
+        val ry = rx * 0.28f
+        val top = size.height * 0.05f
+        val bot = size.height * 0.94f
+        val bodyTop = top + ry
+        val bodyBot = bot - ry
+        val filled = level.coerceIn(0f, 1f)
+        val ySurf = bodyBot - (bodyBot - bodyTop) * filled
+        val glass = Path().apply {
+            addOval(Rect(cx - rx, top, cx + rx, top + ry * 2f))
+            addRect(Rect(cx - rx, bodyTop, cx + rx, bodyBot))
+            addOval(Rect(cx - rx, bot - ry * 2f, cx + rx, bot))
+        }
+        drawPath(glass, Color(0x18E7E0D4))
+        if (filled > 0.02f) {
+            clipPath(glass) {
+                drawRect(
+                    brush = Brush.verticalGradient(
+                        listOf(Color(0xFFD7E6E0), Color(0xFF4E736A)),
+                        startY = ySurf,
+                        endY = bot,
+                    ),
+                    topLeft = Offset(cx - rx, ySurf - sin(1.2f) * 2f),
+                    size = Size(rx * 2f, bot - ySurf + 8f),
+                )
+            }
+        }
+        drawOval(Ink.bronze, Offset(cx - rx, top), Size(rx * 2f, ry * 2f), style = Stroke(1.5f))
+        drawOval(Ink.bronze.copy(alpha = 0.7f), Offset(cx - rx, bot - ry * 2f), Size(rx * 2f, ry * 2f), style = Stroke(1.2f))
     }
 }

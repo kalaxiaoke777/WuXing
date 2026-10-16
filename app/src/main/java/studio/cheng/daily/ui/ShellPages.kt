@@ -42,22 +42,24 @@ import androidx.compose.ui.unit.sp
 import studio.cheng.daily.data.Phase
 import studio.cheng.daily.data.RitualState
 import studio.cheng.daily.data.RitualStore
+import studio.cheng.daily.data.bmr
 import studio.cheng.daily.data.branchDone
-import studio.cheng.daily.data.clock
-import studio.cheng.daily.data.moodMarks
-import studio.cheng.daily.data.orbitMarks
+import studio.cheng.daily.data.cycleReading
+import studio.cheng.daily.data.fireHint
+import studio.cheng.daily.data.fireMarks
+import studio.cheng.daily.data.intakeTarget
 import studio.cheng.daily.data.phaseNow
 import studio.cheng.daily.data.phaseOf
 import studio.cheng.daily.data.phaseWeek
+import studio.cheng.daily.data.tenthText
 import studio.cheng.daily.data.todayKey
-import studio.cheng.daily.data.todayReading
 
 fun Phase.tint(): Color = when (this) {
-    Phase.Water -> Ink.celadon
-    Phase.Fire -> Ink.cinnabar
-    Phase.Metal -> Ink.moon
-    Phase.Earth -> Ink.bronze
     Phase.Wood -> Ink.moss
+    Phase.Fire -> Ink.cinnabar
+    Phase.Earth -> Ink.bronze
+    Phase.Metal -> Ink.moon
+    Phase.Water -> Ink.celadon
 }
 
 @Composable
@@ -69,22 +71,16 @@ fun HomePane(state: RitualState, onOpen: (Phase) -> Unit) {
             .fillMaxSize()
             .verticalScroll(rememberScrollState()),
     ) {
-        Box(Modifier.fillMaxWidth().height(300.dp)) {
-            OrbitInstrument(
-                marks = orbitMarks(state),
+        Box(Modifier.fillMaxWidth().height(340.dp)) {
+            CycleWheel(
+                tides = rows.map { it.tide },
                 onSelect = { index -> onOpen(Phase.entries[index]) },
                 modifier = Modifier.fillMaxSize(),
             )
-            InkText(
-                "拖动观测仪",
-                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 6.dp),
-                size = 11.sp,
-                color = Ink.faint,
-                spacing = 2.sp,
-            )
         }
-        Column(Modifier.padding(horizontal = 26.dp, vertical = 6.dp)) {
-            InkText(todayReading(state), size = 13.sp, color = Ink.bronze, line = 20.sp)
+        Column(Modifier.padding(horizontal = 26.dp, vertical = 4.dp)) {
+            InkText("外环相生 · 内星相克", size = 11.sp, color = Ink.faint, spacing = 2.sp)
+            InkText(cycleReading(state), modifier = Modifier.padding(top = 8.dp), size = 13.sp, color = Ink.bronze, line = 20.sp)
             InkText("今日", modifier = Modifier.padding(top = 16.dp), size = 12.sp, color = Ink.muted, spacing = 3.sp)
             rows.forEach { row ->
                 VowLine(
@@ -96,8 +92,7 @@ fun HomePane(state: RitualState, onOpen: (Phase) -> Unit) {
                     desc = "打开${row.phase.practice}",
                     tint = row.phase.tint(),
                 ) { onOpen(row.phase) }
-                val branches = state.branches.filter { it.phase == row.phase.name }
-                branches.forEach { branch ->
+                state.branches.filter { it.phase == row.phase.name }.forEach { branch ->
                     val done = branchDone(state, branch)
                     InkText(
                         "└  ${branch.title}   $done / ${branch.weekly}",
@@ -234,189 +229,114 @@ fun PhaseDrawer(
                         line = 18.sp,
                     )
                 }
-                state.branches.filter { it.phase == phase.name }.forEach { branch ->
-                    val done = branchDone(state, branch)
-                    Row(
-                        Modifier.padding(start = 18.dp, top = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        InkText("└  ${branch.title}", modifier = Modifier.weight(1f), size = 13.sp, color = Ink.muted)
-                        InkText("$done/${branch.weekly}", size = 12.sp, color = Ink.faint)
-                    }
-                }
             }
         }
     }
 }
 
 @Composable
-fun TunePane(state: RitualState, store: RitualStore) {
-    var host by remember { mutableStateOf(Phase.Wood) }
-    var title by remember { mutableStateOf("") }
-    var weekly by remember { mutableIntStateOf(3) }
+fun FirePane(state: RitualState, store: RitualStore) {
+    val today = state.moodsByDay[todayKey()].orEmpty()
+    val code = today.lastOrNull()
+    val tended = todayKey() in state.fireTended
     Column(
         Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 24.dp, vertical = 8.dp),
     ) {
-        PaneHeader("五行设置", "参数", state.notice)
+        PaneHeader("情绪", if (code == null) "尚未看见" else fireMarks[code], state.notice)
         InkText(
-            "五行是固定的日常。分支挂在某一行下面，按周计次。",
+            "只看此刻的火势，不评好坏。弱是提不起，旺是烦怒，思是停不下来。",
             modifier = Modifier.padding(top = 8.dp),
             size = 13.sp,
             color = Ink.faint,
             line = 20.sp,
         )
-        TuneBlock(Phase.Water, "每日 ${state.waterGoalMl} ml") {
-            Stepper(
-                value = "${state.waterGoalMl} ml",
-                onMinus = { store.setWaterGoal(state.waterGoalMl - 250) },
-                onPlus = { store.setWaterGoal(state.waterGoalMl + 250) },
-                minusDesc = "降低饮水目标",
-                plusDesc = "提高饮水目标",
-            )
-        }
-        TuneBlock(Phase.Fire, "每日 ${state.moodGoal} 次") {
-            Stepper(
-                value = "${state.moodGoal} 次",
-                onMinus = { store.setMoodGoal(state.moodGoal - 1) },
-                onPlus = { store.setMoodGoal(state.moodGoal + 1) },
-                minusDesc = "降低情绪次数",
-                plusDesc = "提高情绪次数",
-            )
-        }
-        TuneBlock(Phase.Metal, "约定 ${clock(state.sleepHour, state.sleepMinute)}") {
-            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                Stepper(
-                    value = "%02d".format(state.sleepHour),
-                    onMinus = { store.setSleep(state.sleepHour - 1, state.sleepMinute) },
-                    onPlus = { store.setSleep(state.sleepHour + 1, state.sleepMinute) },
-                    minusDesc = "入眠提前一小时",
-                    plusDesc = "入眠推后一小时",
-                )
-                Stepper(
-                    value = "%02d".format(state.sleepMinute),
-                    onMinus = { shiftSleep(store, state, -5) },
-                    onPlus = { shiftSleep(store, state, 5) },
-                    minusDesc = "入眠提前五分钟",
-                    plusDesc = "入眠推后五分钟",
-                )
-            }
-        }
-        TuneBlock(Phase.Earth, "每日 ${state.mealGoal} 餐") {
-            Stepper(
-                value = "${state.mealGoal} 餐",
-                onMinus = { store.setMealGoal(state.mealGoal - 1) },
-                onPlus = { store.setMealGoal(state.mealGoal + 1) },
-                minusDesc = "降低每日餐数",
-                plusDesc = "提高每日餐数",
-            )
-        }
-        TuneBlock(Phase.Wood, "每周 ${state.strengthGoal} 次") {
-            Stepper(
-                value = "${state.strengthGoal} 次",
-                onMinus = { store.setStrengthGoal(state.strengthGoal - 1) },
-                onPlus = { store.setStrengthGoal(state.strengthGoal + 1) },
-                minusDesc = "降低每周次数",
-                plusDesc = "提高每周次数",
-            )
-        }
-        InkText("新的分支", modifier = Modifier.padding(top = 22.dp), size = 12.sp, color = Ink.muted, spacing = 3.sp)
-        Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Phase.entries.forEach { phase ->
-                val on = phase == host
+        Row(Modifier.padding(top = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            fireMarks.forEachIndexed { index, mark ->
+                val on = code == index
+                val tint = when (index) {
+                    0 -> Ink.faint
+                    1 -> Ink.celadon
+                    2 -> Ink.cinnabar
+                    else -> Ink.moon
+                }
                 Box(
                     Modifier
-                        .border(1.dp, if (on) phase.tint() else Ink.line, CircleShape)
-                        .background(if (on) phase.tint().copy(alpha = 0.2f) else Color.Transparent, CircleShape)
+                        .graphicsLayer {
+                            rotationY = (index - 1.5f) * 12f
+                            rotationX = 10f
+                            cameraDistance = 8f * density
+                        }
+                        .border(1.dp, if (on) tint else Ink.line, CircleShape)
+                        .background(if (on) tint.copy(alpha = 0.85f) else Color.Transparent, CircleShape)
                         .clickable(
                             remember { MutableInteractionSource() },
                             null,
                             role = Role.Button,
-                            onClick = { host = phase },
+                            onClick = { store.markMood(index) },
                         )
-                        .semantics { contentDescription = "分支挂在${phase.practice}" }
-                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                        .semantics { contentDescription = "观火$mark" }
+                        .padding(horizontal = 16.dp, vertical = 18.dp),
                 ) {
-                    InkText(phase.glyph, size = 16.sp, color = if (on) phase.tint() else Ink.muted, display = true)
+                    InkText(mark, size = 20.sp, color = if (on) Ink.bg else Ink.text, display = true)
                 }
             }
         }
-        BasicTextField(
-            value = title,
-            onValueChange = { title = it.take(16) },
-            modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
-            textStyle = TextStyle(color = Ink.text, fontSize = 16.sp, fontFamily = FontFamily.SansSerif),
-            cursorBrush = SolidColor(Ink.bronze),
-            singleLine = true,
-            decorationBox = { inner ->
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .border(1.dp, Ink.line)
-                        .padding(horizontal = 12.dp, vertical = 12.dp),
-                ) {
-                    if (title.isEmpty()) InkText("例如：晨间拉伸", size = 14.sp, color = Ink.faint)
-                    inner()
-                }
-            },
-        )
-        Stepper(
-            value = "每周 $weekly 次",
-            onMinus = { weekly = (weekly - 1).coerceAtLeast(1) },
-            onPlus = { weekly = (weekly + 1).coerceAtMost(7) },
-            minusDesc = "降低分支次数",
-            plusDesc = "提高分支次数",
-            modifier = Modifier.padding(top = 10.dp),
-        )
-        Seal(
-            "接入分支",
-            "接入这条分支",
-            {
-                store.addBranch(host, title, weekly)
-                title = ""
-            },
-            modifier = Modifier.padding(top = 10.dp),
-            accent = true,
-            enabled = title.isNotBlank(),
-        )
-        state.branches.forEach { branch ->
-            val phase = phaseOf(branch.phase) ?: return@forEach
-            val done = branchDone(state, branch)
-            Row(
-                Modifier.padding(top = 14.dp).fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                InkText(phase.glyph, size = 18.sp, color = phase.tint(), display = true)
-                Column(Modifier.padding(start = 10.dp).weight(1f)) {
-                    InkText(branch.title, size = 15.sp)
-                    InkText("本周 $done / ${branch.weekly}", size = 12.sp, color = Ink.muted)
-                }
-                Seal("撤下", "撤下分支${branch.title}", { store.removeBranch(branch.id) })
+        if (code != null) {
+            InkText(fireHint(code), modifier = Modifier.padding(top = 14.dp), size = 14.sp, color = Ink.cinnabar, line = 22.sp)
+            if (code == 3 && state.noteWhenThink) {
+                BasicTextField(
+                    value = state.fireNotes[todayKey()].orEmpty(),
+                    onValueChange = store::setFireNote,
+                    modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+                    textStyle = TextStyle(color = Ink.text, fontSize = 16.sp, fontFamily = FontFamily.SansSerif),
+                    cursorBrush = SolidColor(Ink.bronze),
+                    singleLine = true,
+                    decorationBox = { inner ->
+                        Box(
+                            Modifier
+                                .fillMaxWidth()
+                                .border(1.dp, Ink.line)
+                                .padding(horizontal = 12.dp, vertical = 12.dp),
+                        ) {
+                            if (state.fireNotes[todayKey()].isNullOrEmpty()) {
+                                InkText("把那件事写成一句", size = 14.sp, color = Ink.faint)
+                            }
+                            inner()
+                        }
+                    },
+                )
+            }
+            if (code != 1) {
+                Seal(
+                    if (tended) "已照做" else "照做了",
+                    "做完这一次收束",
+                    store::tendFire,
+                    Modifier.padding(top = 10.dp),
+                    accent = !tended,
+                    enabled = !tended,
+                )
+            }
+            if (today.isNotEmpty()) {
+                InkText(
+                    "今日  " + today.joinToString("  ") { fireMarks.getOrElse(it) { "·" } },
+                    modifier = Modifier.padding(top = 12.dp),
+                    size = 13.sp,
+                    color = Ink.muted,
+                )
+                Seal("撤回", "撤回一次观火", store::undoMood, Modifier.padding(top = 8.dp))
             }
         }
-        Box(Modifier.height(18.dp))
-    }
-}
-
-@Composable
-private fun TuneBlock(phase: Phase, meta: String, control: @Composable () -> Unit) {
-    Column(Modifier.padding(top = 18.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            InkText(phase.glyph, size = 22.sp, color = phase.tint(), display = true)
-            Column(Modifier.padding(start = 10.dp)) {
-                InkText(phase.practice, size = 15.sp)
-                InkText(meta, size = 12.sp, color = Ink.muted)
-            }
-        }
-        InkText(phase.verse, modifier = Modifier.padding(top = 6.dp), size = 12.sp, color = Ink.faint, line = 18.sp)
-        Box(Modifier.padding(top = 8.dp)) { control() }
+        BranchRail(Phase.Fire, state, store)
     }
 }
 
 @Composable
 fun SelfPane(state: RitualState, store: RitualStore) {
+    val basal = bmr(state)
+    val target = intakeTarget(state)
     Column(
         Modifier
             .fillMaxSize()
@@ -444,6 +364,55 @@ fun SelfPane(state: RitualState, store: RitualStore) {
                 }
             },
         )
+        InkText("身体", modifier = Modifier.padding(top = 22.dp), size = 12.sp, color = Ink.muted, spacing = 3.sp)
+        InkText(
+            "身高、体重、体脂和年龄用来估基础代谢。土和木的热量差都从这里来。",
+            modifier = Modifier.padding(top = 6.dp),
+            size = 13.sp,
+            color = Ink.faint,
+            line = 20.sp,
+        )
+        InkText("性别", modifier = Modifier.padding(top = 14.dp), size = 12.sp, color = Ink.muted)
+        Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Seal("男", "按男性估算", { store.setMale(true) }, accent = state.male)
+            Seal("女", "按女性估算", { store.setMale(false) }, accent = !state.male)
+        }
+        BodyStep("身高", "${state.heightCm} cm", { store.setHeight(state.heightCm - 1) }, { store.setHeight(state.heightCm + 1) }, "降低身高", "提高身高")
+        BodyStep("体重", "${tenthText(state.weightTenth)} kg", { store.setWeight(state.weightTenth - 5) }, { store.setWeight(state.weightTenth + 5) }, "降低体重", "提高体重")
+        BodyStep(
+            "体脂",
+            if (state.fatTenth == 0) "未填" else "${tenthText(state.fatTenth)}%",
+            { store.setFat(if (state.fatTenth <= 50) 0 else state.fatTenth - 5) },
+            { store.setFat(if (state.fatTenth == 0) 180 else state.fatTenth + 5) },
+            "降低体脂",
+            "提高体脂",
+        )
+        BodyStep("年龄", "${state.age}", { store.setAge(state.age - 1) }, { store.setAge(state.age + 1) }, "降低年龄", "提高年龄")
+        InkText("基础代谢", modifier = Modifier.padding(top = 18.dp), size = 12.sp, color = Ink.muted, spacing = 3.sp)
+        InkText(
+            if (state.bmrManual > 0) "正在用你填的数" else if (state.fatTenth >= 50) "按瘦体重估算 $basal kcal" else "按身高体重估算 $basal kcal",
+            modifier = Modifier.padding(top = 6.dp),
+            size = 13.sp,
+            color = Ink.faint,
+        )
+        Stepper(
+            value = if (state.bmrManual == 0) "估算 $basal" else "${state.bmrManual} kcal",
+            onMinus = { store.setBmrManual(if (state.bmrManual == 0) basal - 50 else state.bmrManual - 50) },
+            onPlus = { store.setBmrManual(if (state.bmrManual == 0) basal + 50 else state.bmrManual + 50) },
+            minusDesc = "降低基础代谢",
+            plusDesc = "提高基础代谢",
+            modifier = Modifier.padding(top = 8.dp),
+        )
+        if (state.bmrManual > 0) {
+            Seal("改回估算", "基础代谢改回估算", { store.setBmrManual(0) }, Modifier.padding(top = 8.dp))
+        }
+        InkText(
+            "当前${studio.cheng.daily.data.seasonLabel(state.season)}，建议摄入约 $target kcal。阶段在土的设置里改。",
+            modifier = Modifier.padding(top = 10.dp),
+            size = 13.sp,
+            color = Ink.bronze,
+            line = 20.sp,
+        )
         InkText("一周从哪天算起", modifier = Modifier.padding(top = 18.dp), size = 12.sp, color = Ink.muted, spacing = 3.sp)
         Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Seal("周一", "一周从周一开始", { store.setMondayWeek(true) }, accent = state.mondayWeek)
@@ -452,8 +421,8 @@ fun SelfPane(state: RitualState, store: RitualStore) {
         InkText("关于", modifier = Modifier.padding(top = 22.dp), size = 12.sp, color = Ink.muted, spacing = 3.sp)
         InkText("澄  0.1.0", modifier = Modifier.padding(top = 8.dp), size = 20.sp, display = true)
         InkText(
-            "日常的五行观测。账户和同步以后再接进来。",
-            modifier = Modifier.padding(top = 8.dp),
+            "五行养生。运动养情绪，情绪助消化，饮食养睡眠，睡眠敛欲望，精气再撑起运动。",
+            modifier = Modifier.padding(top = 8.dp, bottom = 18.dp),
             size = 13.sp,
             color = Ink.faint,
             line = 20.sp,
@@ -462,80 +431,18 @@ fun SelfPane(state: RitualState, store: RitualStore) {
 }
 
 @Composable
-fun FirePane(state: RitualState, store: RitualStore) {
-    val today = state.moodsByDay[todayKey()].orEmpty()
-    Column(
-        Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 24.dp, vertical = 8.dp),
-    ) {
-        PaneHeader("情绪", if (today.isEmpty()) "尚未看见" else "今日 ${today.size} / ${state.moodGoal}", state.notice)
-        InkText(
-            "记下的是此刻的火，不是好坏。",
-            modifier = Modifier.padding(top = 8.dp),
-            size = 13.sp,
-            color = Ink.faint,
-        )
-        Row(Modifier.padding(top = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            moodMarks.forEachIndexed { index, mark ->
-                val on = today.lastOrNull() == index
-                Box(
-                    Modifier
-                        .graphicsLayer {
-                            rotationY = (index - 1.5f) * 14f
-                            rotationX = 12f
-                            cameraDistance = 8f * density
-                        }
-                        .border(1.dp, if (on) Ink.cinnabar else Ink.line, CircleShape)
-                        .background(if (on) Ink.cinnabar.copy(alpha = 0.85f) else Color.Transparent, CircleShape)
-                        .clickable(
-                            remember { MutableInteractionSource() },
-                            null,
-                            role = Role.Button,
-                            onClick = { store.markMood(index) },
-                        )
-                        .semantics { contentDescription = "记下情绪$mark" }
-                        .padding(horizontal = 16.dp, vertical = 18.dp),
-                ) {
-                    InkText(mark, size = 20.sp, color = if (on) Ink.bg else Ink.text, display = true)
-                }
-            }
-        }
-        if (today.isNotEmpty()) {
-            InkText(
-                "今日  " + today.joinToString("  ") { moodMarks.getOrElse(it) { "·" } },
-                modifier = Modifier.padding(top = 14.dp),
-                size = 14.sp,
-                color = Ink.cinnabar,
-            )
-            Seal("撤回", "撤回一次情绪", store::undoMood, Modifier.padding(top = 10.dp))
-        }
-        InkText("每日次数", modifier = Modifier.padding(top = 16.dp), size = 12.sp, color = Ink.muted)
-        Stepper(
-            value = "${state.moodGoal} 次",
-            onMinus = { store.setMoodGoal(state.moodGoal - 1) },
-            onPlus = { store.setMoodGoal(state.moodGoal + 1) },
-            minusDesc = "降低情绪次数",
-            plusDesc = "提高情绪次数",
-            modifier = Modifier.padding(top = 8.dp),
-        )
-        BranchRail(Phase.Fire, state, store)
+private fun BodyStep(
+    label: String,
+    value: String,
+    onMinus: () -> Unit,
+    onPlus: () -> Unit,
+    minusDesc: String,
+    plusDesc: String,
+) {
+    Column(Modifier.padding(top = 14.dp)) {
+        InkText(label, size = 12.sp, color = Ink.muted)
+        Stepper(value, onMinus, onPlus, minusDesc, plusDesc, Modifier.padding(top = 6.dp))
     }
-}
-
-private fun shiftSleep(store: RitualStore, state: RitualState, delta: Int) {
-    var minute = state.sleepMinute + delta
-    var hour = state.sleepHour
-    while (minute >= 60) {
-        minute -= 60
-        hour = (hour + 1).mod(24)
-    }
-    while (minute < 0) {
-        minute += 60
-        hour = (hour - 1).mod(24)
-    }
-    store.setSleep(hour, minute)
 }
 
 @Composable
@@ -560,4 +467,70 @@ fun BranchRail(phase: Phase, state: RitualState, store: RitualStore) {
         }
     }
     Box(Modifier.height(12.dp))
+}
+
+@Composable
+fun BranchDesk(phase: Phase, state: RitualState, store: RitualStore) {
+    var title by remember(phase) { mutableStateOf("") }
+    var weekly by remember(phase) { mutableIntStateOf(3) }
+    InkText("另加的分支", modifier = Modifier.padding(top = 22.dp), size = 12.sp, color = Ink.muted, spacing = 3.sp)
+    InkText(
+        "固定的日常写在上面。这里挂的是按周计次的附加项。",
+        modifier = Modifier.padding(top = 6.dp),
+        size = 13.sp,
+        color = Ink.faint,
+        line = 20.sp,
+    )
+    BasicTextField(
+        value = title,
+        onValueChange = { title = it.take(16) },
+        modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+        textStyle = TextStyle(color = Ink.text, fontSize = 16.sp, fontFamily = FontFamily.SansSerif),
+        cursorBrush = SolidColor(Ink.bronze),
+        singleLine = true,
+        decorationBox = { inner ->
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, Ink.line)
+                    .padding(horizontal = 12.dp, vertical = 12.dp),
+            ) {
+                if (title.isEmpty()) InkText("例如：晨间拉伸", size = 14.sp, color = Ink.faint)
+                inner()
+            }
+        },
+    )
+    Stepper(
+        value = "每周 $weekly 次",
+        onMinus = { weekly = (weekly - 1).coerceAtLeast(1) },
+        onPlus = { weekly = (weekly + 1).coerceAtMost(7) },
+        minusDesc = "降低分支次数",
+        plusDesc = "提高分支次数",
+        modifier = Modifier.padding(top = 10.dp),
+    )
+    Seal(
+        "接入分支",
+        "接入这条分支",
+        {
+            store.addBranch(phase, title, weekly)
+            title = ""
+        },
+        modifier = Modifier.padding(top = 10.dp),
+        accent = true,
+        enabled = title.isNotBlank(),
+    )
+    state.branches.filter { it.phase == phase.name }.forEach { branch ->
+        val host = phaseOf(branch.phase) ?: return@forEach
+        Row(
+            Modifier.padding(top = 14.dp).fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            InkText(host.glyph, size = 18.sp, color = host.tint(), display = true)
+            Column(Modifier.padding(start = 10.dp).weight(1f)) {
+                InkText(branch.title, size = 15.sp)
+                InkText("每周 ${branch.weekly} 次", size = 12.sp, color = Ink.muted)
+            }
+            Seal("撤下", "撤下分支${branch.title}", { store.removeBranch(branch.id) })
+        }
+    }
 }

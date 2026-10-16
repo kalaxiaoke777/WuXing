@@ -51,6 +51,7 @@ fun ChengApp() {
     val state by store.state.collectAsStateWithLifecycle()
     var tab by remember { mutableStateOf(Tab.Home) }
     var phase by remember { mutableStateOf<Phase?>(null) }
+    var tune by remember { mutableStateOf<Phase?>(null) }
     var drawer by remember { mutableStateOf(false) }
     ChengTheme {
         Box(Modifier.fillMaxSize().background(Ink.bg)) {
@@ -60,7 +61,12 @@ fun ChengApp() {
                 Box(Modifier.fillMaxWidth().height(1.dp).background(Ink.line))
                 Box(Modifier.weight(1f).fillMaxWidth()) {
                     val open = phase
-                    if (open == null) {
+                    val tuning = tune
+                    if (open != null) {
+                        PhaseBody(open, state, store) { phase = null }
+                    } else if (tuning != null && tab == Tab.Tune) {
+                        TuneBody(tuning, state, store) { tune = null }
+                    } else {
                         AnimatedContent(
                             targetState = tab,
                             transitionSpec = { fadeIn(tween(280)) togetherWith fadeOut(tween(160)) },
@@ -68,12 +74,10 @@ fun ChengApp() {
                         ) { current ->
                             when (current) {
                                 Tab.Home -> HomePane(state) { phase = it }
-                                Tab.Tune -> TunePane(state, store)
+                                Tab.Tune -> TuneIndex(state) { tune = it }
                                 Tab.Self -> SelfPane(state, store)
                             }
                         }
-                    } else {
-                        PhaseBody(open, state, store) { phase = null }
                     }
                     PhaseDrawer(
                         open = drawer,
@@ -84,13 +88,14 @@ fun ChengApp() {
                             phase = it
                         },
                     )
-                    if (!drawer && open == null && tab == Tab.Home) {
+                    if (!drawer && open == null && tune == null && tab == Tab.Home) {
                         DrawerHandle { drawer = true }
                     }
                 }
                 IndexBar(tab) {
                     tab = it
                     phase = null
+                    tune = null
                     drawer = false
                 }
             }
@@ -124,8 +129,8 @@ private fun TopMark(onMenu: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         InkText("澄", size = 34.sp, display = true)
-        InkText(
-            "五行观测",
+            InkText(
+            "五行养生",
             modifier = Modifier.padding(start = 12.dp),
             size = 13.sp,
             color = Ink.muted,
@@ -177,12 +182,36 @@ private fun PhaseBody(
         }
         Box(Modifier.weight(1f).fillMaxWidth()) {
             when (phase) {
-                Phase.Water -> WaterPane(state, store)
+                Phase.Wood -> WoodPane(state, store)
                 Phase.Fire -> FirePane(state, store)
-                Phase.Metal -> SleepPane(state, store)
                 Phase.Earth -> MealPane(state, store)
-                Phase.Wood -> StrengthPane(state, store)
+                Phase.Metal -> SleepPane(state, store)
+                Phase.Water -> DesirePane(state, store)
             }
+        }
+    }
+}
+
+@Composable
+private fun TuneBody(
+    phase: Phase,
+    state: RitualState,
+    store: RitualStore,
+    onBack: () -> Unit,
+) {
+    Column(Modifier.fillMaxSize()) {
+        Row(
+            Modifier.padding(horizontal = 22.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Seal("收回", "回到五行设置", onBack)
+            Column(Modifier.padding(start = 14.dp)) {
+                InkText("${phase.glyph} · 设置", size = 16.sp, color = phase.tint(), display = true)
+                InkText(phase.office, modifier = Modifier.padding(top = 2.dp), size = 12.sp, color = Ink.muted)
+            }
+        }
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            PhaseTune(phase, state, store)
         }
     }
 }
