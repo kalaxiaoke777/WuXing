@@ -19,6 +19,7 @@ data class MealReading(
     val balance: Int,
     val foods: List<String>,
     val usedModel: Boolean,
+    val kcal: Int = 0,
 )
 
 data class MealEntry(
@@ -35,6 +36,16 @@ data class MealEntry(
     val foods: List<String>,
     val usedModel: Boolean,
     val kcal: Int = 0,
+    val heatTenth: Int = 0,
+)
+
+data class Digest(
+    val span: String,
+    val day: String,
+    val title: String,
+    val verdict: String,
+    val keep: String,
+    val leave: String,
 )
 
 data class MoveEntry(
@@ -66,12 +77,12 @@ data class Branch(
 )
 
 data class RitualState(
-    val heightCm: Int = 170,
+    val heightTenth: Int = 1700,
     val weightTenth: Int = 650,
     val fatTenth: Int = 0,
-    val age: Int = 28,
+    val ageTenth: Int = 280,
     val male: Boolean = true,
-    val bmrManual: Int = 0,
+    val bmrTenth: Int = 0,
     val season: String = "keep",
     val stepGoal: Int = 8000,
     val sleepGoalTenth: Int = 70,
@@ -90,6 +101,7 @@ data class RitualState(
     val vows: List<Vow> = defaultVows(),
     val branches: List<Branch> = emptyList(),
     val branchEpochs: Map<String, List<Long>> = emptyMap(),
+    val digests: List<Digest> = emptyList(),
     val notice: String = "",
 )
 
@@ -103,9 +115,9 @@ class RitualStore(context: Context) {
     private val _state = MutableStateFlow(load())
     val state: StateFlow<RitualState> = _state.asStateFlow()
 
-    fun setHeight(cm: Int) {
-        val value = cm.coerceIn(140, 220)
-        update(_state.value.copy(heightCm = value, notice = "身高改为 $value cm"))
+    fun setHeight(tenth: Int) {
+        val value = tenth.coerceIn(1400, 2200)
+        update(_state.value.copy(heightTenth = value, notice = "身高改为 ${tenthText(value)} cm"))
     }
 
     fun setWeight(tenth: Int) {
@@ -122,19 +134,19 @@ class RitualStore(context: Context) {
         update(_state.value.copy(fatTenth = value, notice = note))
     }
 
-    fun setAge(years: Int) {
-        val value = years.coerceIn(14, 80)
-        update(_state.value.copy(age = value, notice = "年龄改为 $value"))
+    fun setAge(tenth: Int) {
+        val value = tenth.coerceIn(140, 900)
+        update(_state.value.copy(ageTenth = value, notice = "年龄改为 ${tenthText(value)}"))
     }
 
     fun setMale(male: Boolean) {
         update(_state.value.copy(male = male, notice = if (male) "按男性估算代谢" else "按女性估算代谢"))
     }
 
-    fun setBmrManual(kcal: Int) {
-        val value = if (kcal <= 0) 0 else kcal.coerceIn(900, 4000)
-        val note = if (value == 0) "基础代谢改回估算" else "基础代谢改为 $value kcal"
-        update(_state.value.copy(bmrManual = value, notice = note))
+    fun setBmrManual(tenth: Int) {
+        val value = if (tenth <= 0) 0 else tenth.coerceIn(9000, 40000)
+        val note = if (value == 0) "基础代谢改回估算" else "基础代谢改为 ${tenthText(value)} kcal"
+        update(_state.value.copy(bmrTenth = value, notice = note))
     }
 
     fun setSeason(key: String) {
@@ -148,12 +160,19 @@ class RitualStore(context: Context) {
     }
 
     fun setSleepGoal(tenth: Int) {
-        val goal = tenth.coerceIn(60, 100)
+        val goal = tenth.coerceIn(40, 120)
         update(_state.value.copy(sleepGoalTenth = goal, notice = "睡眠改为 ${tenthText(goal)} 小时"))
     }
 
     fun setNoteWhenThink(on: Boolean) {
         update(_state.value.copy(noteWhenThink = on, notice = if (on) "思虑时写下那一句" else "思虑时不必写"))
+    }
+
+    fun setWater(ml: Int) {
+        val day = todayKey()
+        val cur = _state.value
+        val value = ml.coerceIn(0, 8000)
+        update(cur.copy(waterByDay = cur.waterByDay + (day to value), notice = "饮水改为 $value ml"))
     }
 
     fun addWater(delta: Int) {
@@ -170,11 +189,11 @@ class RitualStore(context: Context) {
     }
 
     fun setMealGoal(count: Int) {
-        val goal = count.coerceIn(1, 5)
+        val goal = count.coerceIn(1, 8)
         update(_state.value.copy(mealGoal = goal, notice = "每日餐数改为 $goal"))
     }
 
-    fun logMove(kind: String, amount: Int) {
+    fun logMove(kind: String, amount: Int, fromPhone: Boolean = false) {
         val cur = _state.value
         val size = amount.coerceAtLeast(1)
         val kcal = moveKcal(kind, size, weightKg(cur))
@@ -188,7 +207,8 @@ class RitualStore(context: Context) {
         val day = todayKey()
         val prior = cur.movesByDay[day].orEmpty()
         val kept = if (kind == "steps") prior.filterNot { it.kind == "steps" } + entry else (prior + entry).takeLast(12)
-        update(cur.copy(movesByDay = cur.movesByDay + (day to kept), notice = "记下${moveLabel(kind)} · $kcal kcal"))
+        val note = if (fromPhone) "读到手机 $size 步" else "记下${moveLabel(kind)} · $kcal kcal"
+        update(cur.copy(movesByDay = cur.movesByDay + (day to kept), notice = note))
     }
 
     fun undoMove(id: String) {
@@ -258,7 +278,7 @@ class RitualStore(context: Context) {
     }
 
     fun setVowSpan(id: String, days: Int) {
-        val span = days.coerceIn(1, 180)
+        val span = days.coerceIn(1, 365)
         val cur = _state.value
         val vow = cur.vows.find { it.id == id } ?: return
         update(
@@ -284,24 +304,36 @@ class RitualStore(context: Context) {
             balance = reading.balance,
             foods = reading.foods,
             usedModel = reading.usedModel,
+            kcal = reading.kcal.coerceIn(0, 4000),
+            heatTenth = reading.kcal.coerceIn(0, 4000) * 10,
         )
         val cur = _state.value
         val day = todayKey()
         val kept = ((cur.mealsByDay[day] ?: emptyList()) + entry).takeLast(20)
-        update(cur.copy(mealsByDay = cur.mealsByDay + (day to kept), notice = "这一餐 ${reading.score} · ${reading.title}"))
+        val heat = if (reading.kcal > 0) "${reading.kcal} kcal · " else ""
+        update(cur.copy(mealsByDay = cur.mealsByDay + (day to kept), notice = "这一餐 $heat${reading.title}"))
         return id
     }
 
     fun addIntake(kcal: Int) {
-        val amount = kcal.coerceIn(50, 2500)
+        addNamedMeal("", kcal * 10)
+    }
+
+    fun addNamedMeal(title: String, heat: Int) {
+        val tenth = heat.coerceIn(0, 40000)
+        val amount = (tenth + 5) / 10
+        val cur = _state.value
+        val day = todayKey()
+        val existing = cur.mealsByDay[day].orEmpty()
+        val name = title.trim().ifBlank { "第${existing.size + 1}餐" }.take(12)
         val id = System.currentTimeMillis().toString()
         val entry = MealEntry(
             id = id,
             epoch = System.currentTimeMillis(),
             imagePath = "",
             score = 0,
-            title = "补记",
-            commentary = "热量先记在这里。模型接上之后，可以从照片估。",
+            title = name,
+            commentary = "",
             produce = 0,
             variety = 0,
             fresh = 0,
@@ -309,21 +341,43 @@ class RitualStore(context: Context) {
             foods = emptyList(),
             usedModel = false,
             kcal = amount,
+            heatTenth = tenth,
         )
+        val kept = (existing + entry).takeLast(20)
+        update(cur.copy(mealsByDay = cur.mealsByDay + (day to kept), notice = "记下$name · ${tenthText(tenth)} kcal"))
+    }
+
+    fun setMealName(id: String, title: String) {
         val cur = _state.value
         val day = todayKey()
-        val kept = ((cur.mealsByDay[day] ?: emptyList()) + entry).takeLast(20)
-        update(cur.copy(mealsByDay = cur.mealsByDay + (day to kept), notice = "补记 $amount kcal"))
+        val list = cur.mealsByDay[day].orEmpty()
+        val index = list.indexOfFirst { it.id == id }
+        if (index < 0) return
+        val name = title.trim().ifBlank { "第${index + 1}餐" }.take(12)
+        val next = list.map { if (it.id == id) it.copy(title = name) else it }
+        update(cur.copy(mealsByDay = cur.mealsByDay + (day to next), notice = "这餐改称$name"))
     }
 
     fun setMealKcal(id: String, kcal: Int) {
+        setMealHeat(id, kcal.coerceIn(0, 4000) * 10)
+    }
+
+    fun setMealHeat(id: String, heat: Int) {
         val cur = _state.value
         val day = todayKey()
         val list = cur.mealsByDay[day].orEmpty()
         if (list.none { it.id == id }) return
-        val amount = kcal.coerceIn(0, 4000)
-        val next = list.map { if (it.id == id) it.copy(kcal = amount) else it }
-        update(cur.copy(mealsByDay = cur.mealsByDay + (day to next), notice = "这餐热量改为 $amount kcal"))
+        val tenth = heat.coerceIn(0, 40000)
+        val next = list.map {
+            if (it.id == id) it.copy(kcal = (tenth + 5) / 10, heatTenth = tenth) else it
+        }
+        update(cur.copy(mealsByDay = cur.mealsByDay + (day to next), notice = "这餐热量改为 ${tenthText(tenth)} kcal"))
+    }
+
+    fun saveDigest(digest: Digest) {
+        val cur = _state.value
+        val kept = (cur.digests.filterNot { it.span == digest.span && it.day == digest.day } + digest).takeLast(24)
+        update(cur.copy(digests = kept, notice = digest.title))
     }
 
     fun removeMeal(id: String) {
@@ -391,9 +445,28 @@ class RitualStore(context: Context) {
         update(cur.copy(branchEpochs = cur.branchEpochs + (id to kept), notice = "已撤回分支 · ${branch.title}"))
     }
 
+    var onLocalChange: (() -> Unit)? = null
+    private var muteCloud = false
+
+    fun exportJson(): String = _state.value.toJson()
+
+    fun replaceFromCloud(raw: String) {
+        muteCloud = true
+        try {
+            val next = parse(raw).copy(notice = "已从云端导入")
+            _state.value = next
+            prefs.edit().putString(KEY, next.toJson()).apply()
+        } catch (_: Exception) {
+            _state.value = _state.value.copy(notice = "云端记录读不出来")
+        } finally {
+            muteCloud = false
+        }
+    }
+
     private fun update(next: RitualState) {
         _state.value = next
         prefs.edit().putString(KEY, next.toJson()).apply()
+        if (!muteCloud) onLocalChange?.invoke()
     }
 
     private fun load(): RitualState {
@@ -408,12 +481,12 @@ class RitualStore(context: Context) {
     private fun RitualState.toJson(): String {
         val root = JSONObject()
         root.put("schema", 2)
-        root.put("height", heightCm)
+        root.put("height", heightTenth)
         root.put("weight", weightTenth)
         root.put("fat", fatTenth)
-        root.put("age", age)
+        root.put("age", ageTenth)
         root.put("male", male)
-        root.put("bmr", bmrManual)
+        root.put("bmr", bmrTenth)
         root.put("season", season)
         root.put("stepGoal", stepGoal)
         root.put("sleepGoal", sleepGoalTenth)
@@ -434,6 +507,19 @@ class RitualStore(context: Context) {
         val marks = JSONObject()
         branchEpochs.forEach { (id, list) -> marks.put(id, JSONArray(list)) }
         root.put("branchMarks", marks)
+        val digestArr = JSONArray()
+        digests.forEach { item ->
+            digestArr.put(
+                JSONObject()
+                    .put("span", item.span)
+                    .put("day", item.day)
+                    .put("title", item.title)
+                    .put("verdict", item.verdict)
+                    .put("keep", item.keep)
+                    .put("leave", item.leave),
+            )
+        }
+        root.put("digests", digestArr)
         return root.toString()
     }
 
@@ -441,18 +527,24 @@ class RitualStore(context: Context) {
         val root = JSONObject(raw)
         val schema = root.optInt("schema", 1)
         return RitualState(
-            heightCm = root.optInt("height", 170).coerceIn(140, 220),
+            heightTenth = root.optInt("height", 1700).let { if (it < 400) it * 10 else it }.coerceIn(1400, 2200),
             weightTenth = root.optInt("weight", 650).coerceIn(350, 2000),
             fatTenth = root.optInt("fat", 0).let { if (it in 1..49) 50 else it.coerceIn(0, 600) },
-            age = root.optInt("age", 28).coerceIn(14, 80),
+            ageTenth = root.optInt("age", 280).let { if (it < 100) it * 10 else it }.coerceIn(140, 900),
             male = root.optBoolean("male", true),
-            bmrManual = root.optInt("bmr", 0).let { if (it <= 0) 0 else it.coerceIn(900, 4000) },
+            bmrTenth = root.optInt("bmr", 0).let { raw ->
+                when {
+                    raw <= 0 -> 0
+                    raw < 6000 -> raw * 10
+                    else -> raw
+                }
+            }.coerceIn(0, 40000),
             season = root.optString("season", "keep").let { if (it == "cut" || it == "gain") it else "keep" },
             stepGoal = root.optInt("stepGoal", 8000).coerceIn(2000, 30000),
-            sleepGoalTenth = root.optInt("sleepGoal", 70).coerceIn(60, 100),
+            sleepGoalTenth = root.optInt("sleepGoal", 70).coerceIn(40, 120),
             noteWhenThink = root.optBoolean("thinkNote", true),
             waterGoalMl = root.optInt("waterGoal", 2000).coerceIn(500, 5000),
-            mealGoal = root.optInt("mealGoal", 3).coerceIn(1, 5),
+            mealGoal = root.optInt("mealGoal", 3).coerceIn(1, 8),
             mondayWeek = root.optBoolean("weekMonday", true),
             name = root.optString("name").take(12),
             waterByDay = root.optJSONObject("water").toIntMap(),
@@ -465,6 +557,7 @@ class RitualStore(context: Context) {
             vows = ensureVows(parseVows(root.optJSONArray("vows"))),
             branches = parseBranches(root.optJSONArray("branches")),
             branchEpochs = parseBranchMarks(root.optJSONObject("branchMarks")),
+            digests = parseDigests(root.optJSONArray("digests")),
         )
     }
 
@@ -512,6 +605,7 @@ class RitualStore(context: Context) {
                         put("balance", meal.balance)
                         put("model", meal.usedModel)
                         put("kcal", meal.kcal)
+                        put("heat", meal.heatTenth())
                         put("foods", JSONArray(meal.foods))
                     },
                 )
@@ -619,12 +713,34 @@ class RitualStore(context: Context) {
                             foods = foods,
                             usedModel = item.optBoolean("model"),
                             kcal = item.optInt("kcal"),
+                            heatTenth = item.optInt("heat", item.optInt("kcal") * 10),
                         ),
                     )
                 }
             }
         }
         return out
+    }
+
+    private fun parseDigests(arr: JSONArray?): List<Digest> {
+        if (arr == null) return emptyList()
+        return buildList {
+            for (i in 0 until arr.length()) {
+                val item = arr.optJSONObject(i) ?: continue
+                val span = item.optString("span")
+                if (span != "day" && span != "week" && span != "month") continue
+                add(
+                    Digest(
+                        span = span,
+                        day = item.optString("day"),
+                        title = item.optString("title").take(12),
+                        verdict = item.optString("verdict").take(40),
+                        keep = item.optString("keep").take(20),
+                        leave = item.optString("leave").take(20),
+                    ),
+                )
+            }
+        }
     }
 
     private fun parseMoves(obj: JSONObject?): Map<String, List<MoveEntry>> {

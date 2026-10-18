@@ -31,7 +31,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -52,29 +51,31 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import studio.cheng.daily.device.CloudApi
+import studio.cheng.daily.device.CloudError
+import studio.cheng.daily.device.Session
 import studio.cheng.daily.data.MealEntry
 import studio.cheng.daily.data.Phase
 import studio.cheng.daily.data.RitualState
 import studio.cheng.daily.data.RitualStore
-import studio.cheng.daily.data.bmr
-import studio.cheng.daily.data.dayBurn
 import studio.cheng.daily.data.dayIntake
 import studio.cheng.daily.data.energyLine
+import studio.cheng.daily.data.heatTenth
 import studio.cheng.daily.data.intakeTarget
 import studio.cheng.daily.data.seasonLabel
+import studio.cheng.daily.data.tenthText
 import studio.cheng.daily.data.todayKey
 import kotlin.math.sin
 import studio.cheng.daily.vision.MealVision
 import studio.cheng.daily.vision.copyUri
 import studio.cheng.daily.vision.decodeOriented
-import studio.cheng.daily.vision.drawSample
 import studio.cheng.daily.vision.limitSide
-import studio.cheng.daily.vision.loadAssetBitmap
 import studio.cheng.daily.vision.saveMealJpeg
 import java.io.File
 import kotlin.coroutines.cancellation.CancellationException
@@ -87,9 +88,9 @@ fun MealPane(state: RitualState, store: RitualStore) {
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var selected by remember { mutableStateOf<String?>(null) }
+    var ledger by remember { mutableStateOf(false) }
     val meals = state.mealsByDay[todayKey()].orEmpty()
     val current = meals.find { it.id == selected } ?: meals.lastOrNull()
-    var draft by remember { mutableIntStateOf(300) }
     val ml = state.waterByDay[todayKey()] ?: 0
     val shot = remember {
         File(File(context.cacheDir, "camera").apply { mkdirs() }, "shot.jpg")
@@ -104,8 +105,19 @@ fun MealPane(state: RitualState, store: RitualStore) {
             error = null
             val limited = limitSide(bitmap, 1280)
             try {
-                val reading = withContext(Dispatchers.Default) { vision.score(limited) }
                 val path = withContext(Dispatchers.IO) { saveMealJpeg(context, limited) }
+                val cloud = if (Session.token(context) != null) {
+                    try {
+                        val bytes = withContext(Dispatchers.IO) { File(path).readBytes() }
+                        CloudApi.understandMeal(context, bytes)
+                    } catch (cloudError: CloudError) {
+                        error = cloudError.message
+                        null
+                    }
+                } else {
+                    null
+                }
+                val reading = cloud ?: withContext(Dispatchers.Default) { vision.score(limited) }
                 selected = store.addMeal(path, reading)
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -133,7 +145,7 @@ fun MealPane(state: RitualState, store: RitualStore) {
             try {
                 camera.launch(shotUri)
             } catch (_: Throwable) {
-                error = "镜头打不开，用相册或样张"
+                error = "镜头打不开，改用相册"
             }
         } else {
             error = "没有镜头权限"
@@ -152,17 +164,11 @@ fun MealPane(state: RitualState, store: RitualStore) {
             try {
                 camera.launch(shotUri)
             } catch (_: Throwable) {
-                error = "镜头打不开，用相册或样张"
+                error = "镜头打不开，改用相册"
             }
         } else {
             permission.launch(Manifest.permission.CAMERA)
         }
-    }
-
-    fun sample(heavy: Boolean) {
-        val asset = if (heavy) "samples/heavy.jpg" else "samples/light.jpg"
-        val bitmap = loadAssetBitmap(context, asset) ?: drawSample(heavy)
-        begin(bitmap)
     }
 
     Column(
@@ -172,10 +178,10 @@ fun MealPane(state: RitualState, store: RitualStore) {
             .padding(horizontal = 22.dp, vertical = 8.dp),
     ) {
         val intake = dayIntake(state)
-        PaneHeader("饮食", if (busy) "在读" else if (intake > 0) "$intake kcal" else "三餐与饮水", state.notice)
-        InkText(energyLine(state), modifier = Modifier.padding(top = 8.dp), size = 13.sp, color = Ink.bronze)
+        PaneHeader("饮食", if (busy) "在读" else if (intake > 0) "$intake kcal" else "进食与饮水", state.notice)
+        InkText(energyLine(state), modifier = Modifier.padding(top = 8.dp), size = 13.sp, color = Ink.bronze, line = 20.sp)
         InkText(
-            "${seasonLabel(state.season)}建议 ${intakeTarget(state)} kcal · 代谢 ${bmr(state)} · 运动 ${dayBurn(state)}",
+            "${seasonLabel(state.season)}建议摄入 ${intakeTarget(state)} kcal",
             modifier = Modifier.padding(top = 4.dp),
             size = 12.sp,
             color = Ink.faint,
@@ -197,21 +203,18 @@ fun MealPane(state: RitualState, store: RitualStore) {
                 MealPhoto(meal.imagePath)
             }
             Slip(meal)
-            InkText("这餐热量", modifier = Modifier.padding(top = 12.dp), size = 12.sp, color = Ink.muted)
-            Stepper(
-                value = if (meal.kcal == 0) "未估" else "${meal.kcal} kcal",
-                onMinus = { store.setMealKcal(meal.id, meal.kcal - 50) },
-                onPlus = { store.setMealKcal(meal.id, if (meal.kcal == 0) 200 else meal.kcal + 50) },
+            MeasureStepper(
+                label = "热量",
+                tenth = meal.heatTenth(),
+                suffix = "kcal",
+                step = 50,
+                min = 0,
+                max = 40000,
+                onCommit = { store.setMealHeat(meal.id, it) },
                 minusDesc = "降低这餐热量",
                 plusDesc = "提高这餐热量",
-                modifier = Modifier.padding(top = 6.dp),
-            )
-            InkText(
-                "照片估热量以后交给模型，现在先手填。",
-                modifier = Modifier.padding(top = 4.dp),
-                size = 12.sp,
-                color = Ink.faint,
-            )
+            modifier = Modifier.padding(top = 12.dp),
+        )
             Seal("撤下这一餐", "撤下这一餐", { store.removeMeal(meal.id) }, Modifier.padding(top = 8.dp))
         } ?: EmptySlip()
         error?.let {
@@ -220,21 +223,21 @@ fun MealPane(state: RitualState, store: RitualStore) {
         Row(Modifier.padding(top = 14.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Seal("拍摄", "拍摄这一餐", { shoot() }, accent = true, enabled = !busy)
             Seal("相册", "从相册选一餐", { gallery.launch("image/*") }, enabled = !busy)
+            Seal("今日各餐", "打开今日摄入", { ledger = true })
         }
-        Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Seal("清淡样张", "用清淡样张", { sample(false) }, enabled = !busy)
-            Seal("偏重样张", "用偏重样张", { sample(true) }, enabled = !busy)
+        if (ledger) {
+            Dialog(onDismissRequest = { ledger = false }) {
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
+                        .background(Ink.bg)
+                        .padding(16.dp),
+                ) {
+                    MealLedger(meals, store) { ledger = false }
+                }
+            }
         }
-        InkText("补记热量", modifier = Modifier.padding(top = 16.dp), size = 12.sp, color = Ink.muted, spacing = 3.sp)
-        Stepper(
-            value = "$draft kcal",
-            onMinus = { draft = (draft - 50).coerceAtLeast(50) },
-            onPlus = { draft = (draft + 50).coerceAtMost(2000) },
-            minusDesc = "降低补记热量",
-            plusDesc = "提高补记热量",
-            modifier = Modifier.padding(top = 8.dp),
-        )
-        Seal("记入", "补记热量", { store.addIntake(draft) }, Modifier.padding(top = 8.dp), accent = true)
         InkText("饮水", modifier = Modifier.padding(top = 18.dp), size = 12.sp, color = Ink.muted, spacing = 3.sp)
         Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             WaterCup(ml / state.waterGoalMl.toFloat(), Modifier.size(92.dp, 132.dp))
@@ -243,12 +246,19 @@ fun MealPane(state: RitualState, store: RitualStore) {
                 InkText("/ ${state.waterGoalMl} ml", size = 13.sp, color = Ink.muted)
             }
         }
-        Row(Modifier.padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Seal("+200", "加上200毫升", { store.addWater(200) })
-            Seal("+350", "加上350毫升", { store.addWater(350) })
-            Seal("+500", "加上500毫升", { store.addWater(500) })
-        }
-        Seal("回退 200", "减少200毫升", { store.addWater(-200) }, Modifier.padding(top = 8.dp))
+        MeasureStepper(
+            label = "今日",
+            tenth = ml,
+            suffix = "ml",
+            step = 100,
+            min = 0,
+            max = 8000,
+            onCommit = store::setWater,
+            minusDesc = "减少饮水",
+            plusDesc = "增加饮水",
+            modifier = Modifier.padding(top = 8.dp),
+            decimal = false,
+        )
         BranchRail(Phase.Earth, state, store)
     }
 }
@@ -274,7 +284,7 @@ private fun EmptySlip() {
         ) {
             InkText("尚未落笔", size = 28.sp, color = Ink.paperInk, display = true)
             InkText(
-                "拍下盘子，或先用一张样张，看读数怎么落在纸上。",
+                "拍下盘子，或从相册选一张。各餐的名字和热量在「今日各餐」里改。",
                 modifier = Modifier.padding(top = 8.dp),
                 size = 14.sp,
                 color = Ink.paperFaint,
@@ -337,7 +347,7 @@ private fun Slip(meal: MealEntry) {
                 line = 22.sp,
             )
             InkText(
-                "线上读数尚未接入",
+                if (meal.usedModel) "这一餐由模型读过" else "模型没读成，这张按画面记的",
                 modifier = Modifier.padding(top = 10.dp),
                 size = 11.sp,
                 color = Ink.paperFaint,
@@ -453,4 +463,87 @@ private fun WaterCup(level: Float, modifier: Modifier = Modifier) {
         drawOval(Ink.bronze, Offset(cx - rx, top), Size(rx * 2f, ry * 2f), style = Stroke(1.5f))
         drawOval(Ink.bronze.copy(alpha = 0.7f), Offset(cx - rx, bot - ry * 2f), Size(rx * 2f, ry * 2f), style = Stroke(1.2f))
     }
+}
+
+@Composable
+private fun MealLedger(meals: List<MealEntry>, store: RitualStore, onClose: () -> Unit) {
+    var name by remember { mutableStateOf("") }
+    var heat by remember { mutableStateOf("") }
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(top = 12.dp)
+            .border(1.dp, Ink.line)
+            .padding(12.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            InkText("今日摄入", modifier = Modifier.weight(1f), size = 18.sp, display = true)
+            Seal("收回", "关闭今日各餐", onClose)
+        }
+        if (meals.isEmpty()) {
+            InkText("今天还没有一餐。", modifier = Modifier.padding(top = 10.dp), size = 13.sp, color = Ink.faint)
+        }
+        meals.forEachIndexed { index, meal ->
+            MealEditRow(index, meal, store)
+        }
+        InkText("加一餐", modifier = Modifier.padding(top = 14.dp), size = 12.sp, color = Ink.muted, spacing = 3.sp)
+        LedgerField(name, { name = it.take(12) }, "不填就叫第${meals.size + 1}餐")
+        LedgerField(heat, { heat = it }, "热量，一位小数")
+        Seal(
+            "记下",
+            "记下这一餐",
+            {
+                val tenth = parseMeasure(heat, true) ?: return@Seal
+                store.addNamedMeal(name, tenth)
+                name = ""
+                heat = ""
+            },
+            Modifier.padding(top = 8.dp),
+            accent = true,
+            enabled = heat.isNotBlank(),
+        )
+    }
+}
+
+@Composable
+private fun MealEditRow(index: Int, meal: MealEntry, store: RitualStore) {
+    var name by remember(meal.id, meal.title) { mutableStateOf(meal.title) }
+    var heat by remember(meal.id, meal.heatTenth()) { mutableStateOf(tenthText(meal.heatTenth())) }
+    Column(Modifier.padding(top = 12.dp)) {
+        InkText("第${index + 1}餐", size = 12.sp, color = Ink.muted)
+        LedgerField(name, { name = it.take(12) }, "第${index + 1}餐")
+        LedgerField(heat, { heat = it }, "热量")
+        Seal(
+            "改这餐",
+            "保存这餐的名字和热量",
+            {
+                store.setMealName(meal.id, name)
+                parseMeasure(heat, true)?.let { store.setMealHeat(meal.id, it) }
+            },
+            Modifier.padding(top = 6.dp),
+        )
+    }
+}
+
+@Composable
+private fun LedgerField(value: String, onChange: (String) -> Unit, hint: String) {
+    androidx.compose.foundation.text.BasicTextField(
+        value = value,
+        onValueChange = onChange,
+        modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+        textStyle = androidx.compose.ui.text.TextStyle(color = Ink.text, fontSize = 16.sp),
+        singleLine = true,
+        cursorBrush = androidx.compose.ui.graphics.SolidColor(Ink.bronze),
+        decorationBox = { inner ->
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, Ink.line)
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+            ) {
+                if (value.isEmpty()) InkText(hint, size = 14.sp, color = Ink.faint)
+                inner()
+            }
+        },
+    )
 }

@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -12,21 +14,44 @@ android {
         applicationId = "studio.cheng.daily"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
+        buildConfigField("String", "API_BASE", "\"http://10.0.2.2:8000\"")
         ndk {
             abiFilters += listOf("arm64-v8a", "x86_64")
         }
     }
 
+    signingConfigs {
+        create("release") {
+            val local = Properties()
+            val file = rootProject.file("local.properties")
+            if (file.exists()) file.inputStream().use { local.load(it) }
+            storeFile = rootProject.file(local.getProperty("WUXING_STORE_FILE", "keystore/wuxing-release.jks"))
+            storePassword = local.getProperty("WUXING_STORE_PASSWORD", "")
+            keyAlias = local.getProperty("WUXING_KEY_ALIAS", "wuxing")
+            keyPassword = local.getProperty("WUXING_KEY_PASSWORD", "")
+        }
+    }
+
     buildTypes {
+        debug {
+            buildConfigField("String", "API_BASE", "\"http://10.0.2.2:8000\"")
+        }
         release {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("release")
+            buildConfigField("String", "API_BASE", "\"http://106.54.61.165:8000\"")
         }
     }
 
     buildFeatures {
         compose = true
+        buildConfig = true
+    }
+
+    lint {
+        checkReleaseBuilds = false
     }
 
     compileOptions {
@@ -66,4 +91,5 @@ dependencies {
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.animation:animation")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+    implementation("androidx.health.connect:connect-client:1.1.0-alpha07")
 }

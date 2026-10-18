@@ -21,6 +21,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -42,9 +43,17 @@ import androidx.compose.ui.unit.sp
 import studio.cheng.daily.data.Phase
 import studio.cheng.daily.data.RitualState
 import studio.cheng.daily.data.RitualStore
-import studio.cheng.daily.data.bmr
+import studio.cheng.daily.data.bmrFormula
+import studio.cheng.daily.data.bmrTenth
 import studio.cheng.daily.data.branchDone
 import studio.cheng.daily.data.cycleReading
+import studio.cheng.daily.data.dayScore
+import studio.cheng.daily.data.monthDates
+import studio.cheng.daily.data.scoreWord
+import studio.cheng.daily.data.spanScore
+import studio.cheng.daily.data.weekDates
+import studio.cheng.daily.device.Session
+import java.time.LocalDate
 import studio.cheng.daily.data.fireHint
 import studio.cheng.daily.data.fireMarks
 import studio.cheng.daily.data.intakeTarget
@@ -66,6 +75,9 @@ fun Phase.tint(): Color = when (this) {
 fun HomePane(state: RitualState, onOpen: (Phase) -> Unit) {
     val rows = phaseNow(state)
     val week = phaseWeek(state)
+    val today = LocalDate.now()
+    val weekScore = spanScore(state, weekDates(state.mondayWeek), today)
+    val monthScore = spanScore(state, monthDates(today), today)
     Column(
         Modifier
             .fillMaxSize()
@@ -102,6 +114,26 @@ fun HomePane(state: RitualState, onOpen: (Phase) -> Unit) {
                     )
                 }
             }
+            InkText("评分", modifier = Modifier.padding(top = 22.dp), size = 12.sp, color = Ink.muted, spacing = 3.sp)
+            state.digests.lastOrNull { it.span == "day" }?.let { digest ->
+                InkText(digest.title, modifier = Modifier.padding(top = 8.dp), size = 16.sp, display = true)
+                InkText(digest.verdict, modifier = Modifier.padding(top = 4.dp), size = 13.sp, color = Ink.bronze, line = 20.sp)
+            }
+            Row(
+                Modifier.fillMaxWidth().padding(top = 10.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                ScoreMark("周评分", weekScore.average)
+                ScoreMark("月评分", monthScore.average)
+                ScoreMark("今日", dayScore(state))
+            }
+            InkText(
+                "周均 ${scoreWord(weekScore.average)}。空着的天按 0 分算进去。",
+                modifier = Modifier.padding(top = 8.dp),
+                size = 13.sp,
+                color = Ink.faint,
+            )
             InkText("本周", modifier = Modifier.padding(top = 22.dp), size = 12.sp, color = Ink.muted, spacing = 3.sp)
             Row(
                 Modifier
@@ -114,6 +146,14 @@ fun HomePane(state: RitualState, onOpen: (Phase) -> Unit) {
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun ScoreMark(label: String, score: Int) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        InkText("$score", size = 28.sp, color = Ink.bronze, display = true)
+        InkText(label, modifier = Modifier.padding(top = 2.dp), size = 12.sp, color = Ink.muted)
     }
 }
 
@@ -334,8 +374,13 @@ fun FirePane(state: RitualState, store: RitualStore) {
 }
 
 @Composable
-fun SelfPane(state: RitualState, store: RitualStore) {
-    val basal = bmr(state)
+fun SelfPane(state: RitualState, store: RitualStore, onRank: () -> Unit) {
+    val user by Session.user.collectAsState()
+    val signed = user
+    if (signed == null) {
+        SignGate(store)
+        return
+    }
     val target = intakeTarget(state)
     Column(
         Modifier
@@ -344,6 +389,13 @@ fun SelfPane(state: RitualState, store: RitualStore) {
             .padding(horizontal = 24.dp, vertical = 8.dp),
     ) {
         PaneHeader("个人", if (state.name.isBlank()) "未署名" else state.name, state.notice)
+        InkText(
+            listOf(signed.email, signed.phone).filter { it.isNotBlank() }.joinToString("  ·  ").ifBlank { "已登录" },
+            modifier = Modifier.padding(top = 6.dp),
+            size = 13.sp,
+            color = Ink.muted,
+        )
+        Seal("排名", "打开同修排名", onRank, Modifier.padding(top = 14.dp), accent = true)
         InkText("称呼", modifier = Modifier.padding(top = 16.dp), size = 12.sp, color = Ink.muted, spacing = 3.sp)
         BasicTextField(
             value = state.name,
@@ -366,7 +418,7 @@ fun SelfPane(state: RitualState, store: RitualStore) {
         )
         InkText("身体", modifier = Modifier.padding(top = 22.dp), size = 12.sp, color = Ink.muted, spacing = 3.sp)
         InkText(
-            "身高、体重、体脂和年龄用来估基础代谢。土和木的热量差都从这里来。",
+            "身高、体重、体脂、年龄和性别一起估算基础代谢。点数字可以直接填写，保留一位小数。",
             modifier = Modifier.padding(top = 6.dp),
             size = 13.sp,
             color = Ink.faint,
@@ -377,33 +429,43 @@ fun SelfPane(state: RitualState, store: RitualStore) {
             Seal("男", "按男性估算", { store.setMale(true) }, accent = state.male)
             Seal("女", "按女性估算", { store.setMale(false) }, accent = !state.male)
         }
-        BodyStep("身高", "${state.heightCm} cm", { store.setHeight(state.heightCm - 1) }, { store.setHeight(state.heightCm + 1) }, "降低身高", "提高身高")
-        BodyStep("体重", "${tenthText(state.weightTenth)} kg", { store.setWeight(state.weightTenth - 5) }, { store.setWeight(state.weightTenth + 5) }, "降低体重", "提高体重")
-        BodyStep(
-            "体脂",
-            if (state.fatTenth == 0) "未填" else "${tenthText(state.fatTenth)}%",
-            { store.setFat(if (state.fatTenth <= 50) 0 else state.fatTenth - 5) },
-            { store.setFat(if (state.fatTenth == 0) 180 else state.fatTenth + 5) },
-            "降低体脂",
-            "提高体脂",
+        MeasureStepper("身高", state.heightTenth, "cm", 10, 1400, 2200, store::setHeight, "降低身高", "提高身高", Modifier.padding(top = 12.dp))
+        MeasureStepper("体重", state.weightTenth, "kg", 5, 350, 2000, store::setWeight, "降低体重", "提高体重", Modifier.padding(top = 12.dp))
+        MeasureStepper(
+            label = "体脂",
+            tenth = state.fatTenth,
+            suffix = "%",
+            step = 5,
+            min = 50,
+            max = 600,
+            onCommit = store::setFat,
+            minusDesc = "降低体脂",
+            plusDesc = "提高体脂",
+            modifier = Modifier.padding(top = 12.dp),
+            blankAtZero = true,
         )
-        BodyStep("年龄", "${state.age}", { store.setAge(state.age - 1) }, { store.setAge(state.age + 1) }, "降低年龄", "提高年龄")
+        MeasureStepper("年龄", state.ageTenth, "岁", 10, 140, 900, store::setAge, "降低年龄", "提高年龄", Modifier.padding(top = 12.dp))
         InkText("基础代谢", modifier = Modifier.padding(top = 18.dp), size = 12.sp, color = Ink.muted, spacing = 3.sp)
         InkText(
-            if (state.bmrManual > 0) "正在用你填的数" else if (state.fatTenth >= 50) "按瘦体重估算 $basal kcal" else "按身高体重估算 $basal kcal",
+            "${bmrFormula(state)}，约 ${tenthText(bmrTenth(state))} kcal",
             modifier = Modifier.padding(top = 6.dp),
             size = 13.sp,
             color = Ink.faint,
+            line = 20.sp,
         )
-        Stepper(
-            value = if (state.bmrManual == 0) "估算 $basal" else "${state.bmrManual} kcal",
-            onMinus = { store.setBmrManual(if (state.bmrManual == 0) basal - 50 else state.bmrManual - 50) },
-            onPlus = { store.setBmrManual(if (state.bmrManual == 0) basal + 50 else state.bmrManual + 50) },
+        MeasureStepper(
+            label = "代谢",
+            tenth = if (state.bmrTenth == 0) bmrTenth(state) else state.bmrTenth,
+            suffix = "kcal",
+            step = 100,
+            min = 9000,
+            max = 40000,
+            onCommit = store::setBmrManual,
             minusDesc = "降低基础代谢",
             plusDesc = "提高基础代谢",
             modifier = Modifier.padding(top = 8.dp),
         )
-        if (state.bmrManual > 0) {
+        if (state.bmrTenth > 0) {
             Seal("改回估算", "基础代谢改回估算", { store.setBmrManual(0) }, Modifier.padding(top = 8.dp))
         }
         InkText(
@@ -418,8 +480,9 @@ fun SelfPane(state: RitualState, store: RitualStore) {
             Seal("周一", "一周从周一开始", { store.setMondayWeek(true) }, accent = state.mondayWeek)
             Seal("周日", "一周从周日开始", { store.setMondayWeek(false) }, accent = !state.mondayWeek)
         }
+        ProfileEditor(store)
         InkText("关于", modifier = Modifier.padding(top = 22.dp), size = 12.sp, color = Ink.muted, spacing = 3.sp)
-        InkText("澄  0.1.0", modifier = Modifier.padding(top = 8.dp), size = 20.sp, display = true)
+        InkText("五行  0.1.0", modifier = Modifier.padding(top = 8.dp), size = 20.sp, display = true)
         InkText(
             "五行养生。运动养情绪，情绪助消化，饮食养睡眠，睡眠敛欲望，精气再撑起运动。",
             modifier = Modifier.padding(top = 8.dp, bottom = 18.dp),
@@ -439,9 +502,12 @@ private fun BodyStep(
     minusDesc: String,
     plusDesc: String,
 ) {
-    Column(Modifier.padding(top = 14.dp)) {
-        InkText(label, size = 12.sp, color = Ink.muted)
-        Stepper(value, onMinus, onPlus, minusDesc, plusDesc, Modifier.padding(top = 6.dp))
+    Row(
+        Modifier.fillMaxWidth().padding(top = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        InkText(label, modifier = Modifier.width(52.dp), size = 14.sp, color = Ink.muted)
+        Stepper(value, onMinus, onPlus, minusDesc, plusDesc)
     }
 }
 

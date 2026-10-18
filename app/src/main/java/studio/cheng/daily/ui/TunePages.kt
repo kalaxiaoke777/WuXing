@@ -23,6 +23,7 @@ import studio.cheng.daily.data.Phase
 import studio.cheng.daily.data.RitualState
 import studio.cheng.daily.data.RitualStore
 import studio.cheng.daily.data.bmr
+import studio.cheng.daily.data.bmrFormula
 import studio.cheng.daily.data.intakeTarget
 import studio.cheng.daily.data.phaseNow
 import studio.cheng.daily.data.seasonLabel
@@ -96,16 +97,21 @@ fun PhaseTune(phase: Phase, state: RitualState, store: RitualStore) {
 @Composable
 private fun WoodTune(state: RitualState, store: RitualStore) {
     InkText("日常步数", modifier = Modifier.padding(top = 18.dp), size = 12.sp, color = Ink.muted, spacing = 3.sp)
-    Stepper(
-        value = "${state.stepGoal} 步",
-        onMinus = { store.setStepGoal(state.stepGoal - 1000) },
-        onPlus = { store.setStepGoal(state.stepGoal + 1000) },
+    MeasureStepper(
+        label = "目标",
+        tenth = state.stepGoal,
+        suffix = "步",
+        step = 500,
+        min = 2000,
+        max = 30000,
+        onCommit = store::setStepGoal,
         minusDesc = "降低步数目标",
         plusDesc = "提高步数目标",
         modifier = Modifier.padding(top = 8.dp),
+        decimal = false,
     )
     InkText(
-        "无氧、有氧和步数都记在运动页。热量按个人页的体重估算，以后可以再拆得更细。",
+        "无氧、有氧在运动页手记。步数优先读手机上今天已经走的，读不到再手记。热量按个人页的体重估算。",
         modifier = Modifier.padding(top = 10.dp),
         size = 13.sp,
         color = Ink.faint,
@@ -145,32 +151,42 @@ private fun EarthTune(state: RitualState, store: RitualStore) {
         Seal("增肌", "改为增肌期", { store.setSeason("gain") }, accent = state.season == "gain")
     }
     InkText(
-        "${seasonLabel(state.season)}建议摄入约 $target kcal。基础代谢 ${bmr(state)} kcal，正式配餐以后交给模型。",
+        "${seasonLabel(state.season)}建议摄入约 $target kcal。${bmrFormula(state)}，约 ${bmr(state)} kcal。",
         modifier = Modifier.padding(top = 10.dp),
         size = 13.sp,
         color = Ink.faint,
         line = 20.sp,
     )
-    InkText("每日餐数", modifier = Modifier.padding(top = 16.dp), size = 12.sp, color = Ink.muted)
-    Stepper(
-        value = "${state.mealGoal} 餐",
-        onMinus = { store.setMealGoal(state.mealGoal - 1) },
-        onPlus = { store.setMealGoal(state.mealGoal + 1) },
+    InkText("进食次数", modifier = Modifier.padding(top = 16.dp), size = 12.sp, color = Ink.muted)
+    MeasureStepper(
+        label = "每日",
+        tenth = state.mealGoal,
+        suffix = "餐",
+        step = 1,
+        min = 1,
+        max = 8,
+        onCommit = store::setMealGoal,
         minusDesc = "降低每日餐数",
         plusDesc = "提高每日餐数",
         modifier = Modifier.padding(top = 8.dp),
+        decimal = false,
     )
     InkText("饮水", modifier = Modifier.padding(top = 16.dp), size = 12.sp, color = Ink.muted)
-    Stepper(
-        value = "${state.waterGoalMl} ml",
-        onMinus = { store.setWaterGoal(state.waterGoalMl - 250) },
-        onPlus = { store.setWaterGoal(state.waterGoalMl + 250) },
+    MeasureStepper(
+        label = "目标",
+        tenth = state.waterGoalMl,
+        suffix = "ml",
+        step = 100,
+        min = 500,
+        max = 5000,
+        onCommit = store::setWaterGoal,
         minusDesc = "降低饮水目标",
         plusDesc = "提高饮水目标",
         modifier = Modifier.padding(top = 8.dp),
+        decimal = false,
     )
     InkText(
-        "三餐和饮水都是土的分支。饮水不再单独成行。",
+        "进食和饮水都记在土里。餐数不固定，点数字可以手填。",
         modifier = Modifier.padding(top = 8.dp),
         size = 13.sp,
         color = Ink.faint,
@@ -181,10 +197,14 @@ private fun EarthTune(state: RitualState, store: RitualStore) {
 @Composable
 private fun MetalTune(state: RitualState, store: RitualStore) {
     InkText("每晚时长", modifier = Modifier.padding(top = 18.dp), size = 12.sp, color = Ink.muted, spacing = 3.sp)
-    Stepper(
-        value = "${tenthText(state.sleepGoalTenth)} 小时",
-        onMinus = { store.setSleepGoal(state.sleepGoalTenth - 5) },
-        onPlus = { store.setSleepGoal(state.sleepGoalTenth + 5) },
+    MeasureStepper(
+        label = "时长",
+        tenth = state.sleepGoalTenth,
+        suffix = "小时",
+        step = 5,
+        min = 40,
+        max = 120,
+        onCommit = store::setSleepGoal,
         minusDesc = "降低睡眠时长",
         plusDesc = "提高睡眠时长",
         modifier = Modifier.padding(top = 8.dp),
@@ -209,13 +229,18 @@ private fun WaterTune(state: RitualState, store: RitualStore) {
     )
     state.vows.filter { it.id == "lust" || it.id == "greed" }.forEach { vow ->
         InkText(vow.title, modifier = Modifier.padding(top = 16.dp), size = 15.sp, color = Ink.celadon)
-        Stepper(
-            value = "${vow.spanDays} 天",
-            onMinus = { store.setVowSpan(vow.id, vow.spanDays - 1) },
-            onPlus = { store.setVowSpan(vow.id, vow.spanDays + 1) },
+        MeasureStepper(
+            label = "期限",
+            tenth = vow.spanDays,
+            suffix = "天",
+            step = 1,
+            min = 1,
+            max = 365,
+            onCommit = { store.setVowSpan(vow.id, it) },
             minusDesc = "缩短${vow.title}期限",
             plusDesc = "延长${vow.title}期限",
             modifier = Modifier.padding(top = 8.dp),
+            decimal = false,
         )
     }
 }

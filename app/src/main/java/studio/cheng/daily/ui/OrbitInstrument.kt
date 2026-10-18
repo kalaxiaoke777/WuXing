@@ -34,7 +34,13 @@ import kotlin.math.cos
 import kotlin.math.min
 import kotlin.math.sin
 
-private val phaseColors = listOf(Ink.moss, Ink.cinnabar, Ink.bronze, Ink.moon, Ink.celadon)
+private val phaseColors = listOf(
+    Color(0xFF7CBF5A),
+    Color(0xFFE15A38),
+    Color(0xFFD9A441),
+    Color(0xFFD5DEE6),
+    Color(0xFF3C93D4),
+)
 
 private data class Node(val index: Int, val at: Offset)
 
@@ -111,11 +117,12 @@ fun CycleWheel(
         repeat(5) { index ->
             val color = phaseColors[index]
             val tide = tides.getOrElse(index) { Tide.Empty }
+            val breathe = 0.55f + 0.45f * ((sin(flow * 6.2831855f * 2f + index) + 1f) / 2f)
             val alpha = when (tide) {
-                Tide.Even -> 0.95f
-                Tide.Low -> 0.38f
-                Tide.High -> 0.5f
-                Tide.Empty -> 0.16f
+                Tide.Even -> 0.55f + 0.45f * breathe
+                Tide.Low -> 0.28f
+                Tide.High -> 0.7f
+                Tide.Empty -> 0.18f
             }
             drawArc(
                 color = color.copy(alpha = alpha),
@@ -124,8 +131,14 @@ fun CycleWheel(
                 useCenter = false,
                 topLeft = Offset(cx - ring, cy - ring),
                 size = Size(ring * 2f, ring * 2f),
-                style = Stroke(if (tide == Tide.Even) 2.6f else 1.4f, cap = StrokeCap.Round),
+                style = Stroke(if (tide == Tide.Even) 5.5f else 2.4f, cap = StrokeCap.Round),
             )
+            val bead = at(index, ring).let {
+                val shift = (flow + index / 5f) % 1f
+                val rad = Math.toRadians(-90.0 + index * 72.0 + 8.0 + shift * 56.0)
+                Offset(cx + cos(rad).toFloat() * ring, cy + sin(rad).toFloat() * ring)
+            }
+            drawCircle(color.copy(alpha = 0.9f), 4.5f, bead)
         }
 
         val head = at(0, ring).let {
@@ -163,15 +176,33 @@ fun CycleWheel(
 
         Phase.entries.forEachIndexed { index, phase ->
             val tide = tides.getOrElse(index) { Tide.Empty }
-            val wobble = if (tide == Tide.High) 3f * pulse else 0f
+            val color = phaseColors[index]
+            val flicker = if (index == 1) 4f * sin(flow * 40f) else 0f
+            val wobble = if (tide == Tide.High) 4f * pulse else 0f
             val point = at(index, ring)
             nodes += Node(index, point)
-            val color = phaseColors[index]
-            val radius = 16f + wobble + if (tide == Tide.Even) 2f else 0f
+            val radius = 18f + wobble + flicker + if (tide == Tide.Even) 3f else 0f
+            drawCircle(color.copy(alpha = 0.22f), radius + 16f + 6f * pulse, point)
             drawCircle(Color(0xFF100E0C), radius + 3f, point)
-            drawCircle(color.copy(alpha = if (tide == Tide.Empty) 0.35f else 0.95f), radius, point, style = Stroke(1.6f))
-            if (tide == Tide.Even || tide == Tide.High) {
-                drawCircle(color.copy(alpha = 0.22f), radius * 0.72f, point)
+            drawCircle(color.copy(alpha = if (tide == Tide.Empty) 0.4f else 1f), radius, point, style = Stroke(2.4f))
+            if (tide != Tide.Empty) {
+                drawCircle(color.copy(alpha = 0.28f), radius * 0.72f, point)
+            }
+            when (index) {
+                0 -> {
+                    drawCircle(color, 3f, point + Offset(0f, -radius - 8f - 4f * pulse))
+                    drawCircle(color.copy(alpha = 0.7f), 2f, point + Offset(7f, -radius - 4f))
+                }
+                1 -> drawCircle(Color(0xFFFFD2A8).copy(alpha = 0.55f + 0.4f * ((sin(flow * 50f) + 1f) / 2f)), radius * 0.35f, point)
+                2 -> drawCircle(color.copy(alpha = 0.18f), radius + 10f, point, style = Stroke(6f))
+                3 -> {
+                    drawLine(Color.White.copy(alpha = 0.8f), point + Offset(-radius, 0f), point + Offset(radius, 0f), 1.2f)
+                    drawLine(Color.White.copy(alpha = 0.8f), point + Offset(0f, -radius), point + Offset(0f, radius), 1.2f)
+                }
+                else -> {
+                    val ripple = (flow * 2f + index) % 1f
+                    drawCircle(color.copy(alpha = 0.45f * (1f - ripple)), radius + 18f * ripple, point, style = Stroke(1.5f))
+                }
             }
             val glyph = measurer.measure(phase.glyph, glyphStyle)
             drawText(

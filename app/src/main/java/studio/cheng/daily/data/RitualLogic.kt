@@ -46,16 +46,47 @@ fun tenthText(tenth: Int): String {
 
 fun weightKg(state: RitualState): Double = state.weightTenth / 10.0
 
-fun bmr(state: RitualState): Int {
-    if (state.bmrManual > 0) return state.bmrManual
-    val kg = weightKg(state)
-    if (state.fatTenth >= 50) {
-        val lean = kg * (1.0 - state.fatTenth / 1000.0)
-        return (370 + 21.6 * lean).roundToInt().coerceIn(900, 4000)
+fun heightCm(state: RitualState): Double = state.heightTenth / 10.0
+
+fun ageYears(state: RitualState): Double = state.ageTenth / 10.0
+
+fun MealEntry.heatTenth(): Int = if (heatTenth > 0) heatTenth else kcal * 10
+
+/**
+ * 没填体脂时用 Mifflin–St Jeor（1990）：体重、身高、年龄、性别。
+ * 填了体脂时用 Müller 等（2004）：瘦体重、脂肪量、年龄、性别。
+ * 身高已经体现在称出来的体重和体脂里，所以后一条不再单独乘身高。
+ */
+fun bmrTenth(state: RitualState): Int {
+    if (state.bmrTenth > 0) return state.bmrTenth
+    val kcal = if (state.fatTenth >= 50) mullerKcal(state) else mifflinKcal(state)
+    return (kcal * 10.0).roundToInt().coerceIn(9000, 40000)
+}
+
+fun bmr(state: RitualState): Int = (bmrTenth(state) + 5) / 10
+
+fun bmrFormula(state: RitualState): String {
+    if (state.bmrTenth > 0) return "正在用你填的数"
+    return if (state.fatTenth >= 50) {
+        "Müller：瘦体重、脂肪、年龄、性别"
+    } else {
+        "Mifflin–St Jeor：体重、身高、年龄、性别"
     }
-    val base = 10 * kg + 6.25 * state.heightCm - 5.0 * state.age
-    val sex = if (state.male) 5 else -161
-    return (base + sex).roundToInt().coerceIn(900, 4000)
+}
+
+private fun mifflinKcal(state: RitualState): Double {
+    val sex = if (state.male) 5.0 else -161.0
+    return 10.0 * weightKg(state) + 6.25 * heightCm(state) - 5.0 * ageYears(state) + sex
+}
+
+private fun mullerKcal(state: RitualState): Double {
+    val kg = weightKg(state)
+    val fat = state.fatTenth / 1000.0
+    val lean = kg * (1.0 - fat)
+    val mass = kg - lean
+    val sex = if (state.male) 1.0 else 0.0
+    val mj = 0.05192 * lean + 0.04036 * mass + 0.869 * sex - 0.01181 * ageYears(state) + 2.992
+    return mj * 1000.0 / 4.184
 }
 
 fun intakeTarget(state: RitualState): Int {
@@ -84,7 +115,7 @@ fun dayMoves(state: RitualState, day: String = todayKey()): List<MoveEntry> = st
 fun dayBurn(state: RitualState, day: String = todayKey()): Int = dayMoves(state, day).sumOf { it.kcal }
 
 fun dayIntake(state: RitualState, day: String = todayKey()): Int =
-    state.mealsByDay[day].orEmpty().sumOf { it.kcal }
+    (state.mealsByDay[day].orEmpty().sumOf { it.heatTenth() } + 5) / 10
 
 fun daySteps(state: RitualState, day: String = todayKey()): Int =
     dayMoves(state, day).filter { it.kind == "steps" }.sumOf { it.amount }
@@ -146,7 +177,7 @@ private fun firePulse(state: RitualState, day: String): PhasePulse {
 private fun earthPulse(state: RitualState, day: String): PhasePulse {
     val meals = state.mealsByDay[day].orEmpty()
     val water = state.waterByDay[day] ?: 0
-    val intake = meals.sumOf { it.kcal }
+    val intake = (meals.sumOf { it.heatTenth() } + 5) / 10
     val target = intakeTarget(state)
     val tide = when {
         meals.isEmpty() && water == 0 -> Tide.Empty
@@ -263,14 +294,124 @@ fun vowStreak(vow: Vow, today: LocalDate = LocalDate.now()): Int {
     return count
 }
 
-fun energyLine(state: RitualState, day: String = todayKey()): String {
+fun tideMark(tide: Tide): Int = when (tide) {
+    Tide.Even -> 20
+    Tide.Low -> 10
+    Tide.High -> 6
+    Tide.Empty -> 0
+}
+
+fun dayScore(state: RitualState, day: String = todayKey()): Int {
+    return phaseNow(state, day).sumOf { tideMark(it.tide) }
+}
+
+data class SpanScore(val average: Int, val counted: Int)
+
+fun spanScore(state: RitualState, dates: List<LocalDate>, today: LocalDate = LocalDate.now()): SpanScore {
+    val elapsed = dates.filter { !it.isAfter(today) }
+    if (elapsed.isEmpty()) return SpanScore(0, 0)
+    val sum = elapsed.sumOf { dayScore(state, it.toString()) }
+    return SpanScore(sum / elapsed.size, elapsed.size)
+}
+
+fun monthDates(month: LocalDate): List<LocalDate> {
+    val first = month.withDayOfMonth(1)
+    return (0 until first.lengthOfMonth()).map { first.plusDays(it.toLong()) }
+}
+
+fun digestBrief(state: RitualState, span: String, today: LocalDate = LocalDate.now()): String {
+    val dates = when (span) {
+        "week" -> weekDates(state.mondayWeek, today).filter { !it.isAfter(today) }
+        "month" -> monthDates(today).filter { !it.isAfter(today) }
+        else -> listOf(today)
+    }
+    val lines = ArrayList<String>()
+    lines += "跨度 ${dates.firstOrNull() ?: today} 至 ${dates.lastOrNull() ?: today}，共 ${dates.size} 天。"
+    lines += "评分 ${spanScore(state, dates, today).average}。"
+    var intake = 0
+    var burn = 0
+    var sleep = 0
+    var slept = 0
+    var water = 0
+    dates.forEach { date ->
+        val key = date.toString()
+        intake += dayIntake(state, key)
+        burn += dayBurn(state, key)
+        water += state.waterByDay[key] ?: 0
+        val night = state.nightsByDay[key]
+        if (night != null) {
+            sleep += night.hoursTenth
+            slept += 1
+        }
+    }
+    lines += "饮食 $intake kcal，运动 $burn kcal，基础代谢每天约 ${bmr(state)} kcal，饮水 $water ml。"
+    if (slept > 0) lines += "记下的睡眠平均 ${tenthText(sleep / slept)} 小时。"
+    val vows = state.vows.joinToString("，") { vow ->
+        val broken = dates.count { vow.marks[it.toString()] == false }
+        val held = dates.count { vow.marks[it.toString()] == true }
+        "${vow.title} 守住 $held 破了 $broken"
+    }
+    if (vows.isNotBlank()) lines += vows
+    return lines.joinToString("\n").take(1800)
+}
+
+fun monthCells(month: LocalDate, mondayStart: Boolean): List<LocalDate?> {
+    val first = month.withDayOfMonth(1)
+    val lead = if (mondayStart) first.dayOfWeek.value - 1 else first.dayOfWeek.value % 7
+    return List(lead) { null } + monthDates(first)
+}
+
+fun weekdayLabels(mondayStart: Boolean): List<String> {
+    return if (mondayStart) {
+        listOf("一", "二", "三", "四", "五", "六", "日")
+    } else {
+        listOf("日", "一", "二", "三", "四", "五", "六")
+    }
+}
+
+fun scoreWord(score: Int): String = when {
+    score >= 85 -> "五行在环上"
+    score >= 60 -> "大体还稳"
+    score >= 30 -> "有几环空着"
+    score > 0 -> "才起了个头"
+    else -> "尚未落笔"
+}
+
+data class DayEnergy(
+    val intake: Int,
+    val burn: Int,
+    val basal: Int,
+    val recorded: Boolean,
+) {
+    val gap: Int get() = intake - basal - burn
+}
+
+fun dayEnergy(state: RitualState, day: String = todayKey()): DayEnergy {
     val intake = dayIntake(state, day)
     val burn = dayBurn(state, day)
-    val gap = intake - bmr(state) - burn
-    val word = when {
-        gap <= -80 -> "缺口 ${-gap}"
-        gap >= 80 -> "盈余 $gap"
+    return DayEnergy(intake, burn, bmr(state), intake > 0 || burn > 0)
+}
+
+fun gapText(energy: DayEnergy): String {
+    if (!energy.recorded) return "未记"
+    return when {
+        energy.gap <= -80 -> "缺口 ${-energy.gap}"
+        energy.gap >= 80 -> "盈余 ${energy.gap}"
         else -> "大致持平"
     }
-    return "截至目前 $word kcal"
+}
+
+fun gapMark(energy: DayEnergy): String {
+    if (!energy.recorded) return ""
+    return when {
+        energy.gap <= -80 -> "缺${-energy.gap}"
+        energy.gap >= 80 -> "盈${energy.gap}"
+        else -> "平"
+    }
+}
+
+fun energyLine(state: RitualState, day: String = todayKey()): String {
+    val energy = dayEnergy(state, day)
+    if (!energy.recorded) return "饮食和运动都还没记，缺口还算不出来。"
+    return "饮食 ${energy.intake} − 代谢 ${energy.basal} − 运动 ${energy.burn}，${gapText(energy)} kcal"
 }

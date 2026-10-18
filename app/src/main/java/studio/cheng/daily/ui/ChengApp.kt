@@ -1,5 +1,7 @@
 package studio.cheng.daily.ui
 
+import android.app.Activity
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -21,9 +23,11 @@ import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -38,7 +42,11 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import studio.cheng.daily.data.Phase
+import studio.cheng.daily.device.CloudApi
+import studio.cheng.daily.device.Session
 import studio.cheng.daily.data.RitualState
 import studio.cheng.daily.data.RitualStore
 import studio.cheng.daily.data.formatToday
@@ -52,20 +60,53 @@ fun ChengApp() {
     var tab by remember { mutableStateOf(Tab.Home) }
     var phase by remember { mutableStateOf<Phase?>(null) }
     var tune by remember { mutableStateOf<Phase?>(null) }
+    var ledger by remember { mutableStateOf(false) }
+    var figure by remember { mutableStateOf<Ancient?>(null) }
+    var rank by remember { mutableStateOf(false) }
     var drawer by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    LaunchedEffect(store) {
+        Session.restore(context)
+        var job: kotlinx.coroutines.Job? = null
+        store.onLocalChange = {
+            job?.cancel()
+            job = scope.launch {
+                delay(800)
+                runCatching { CloudApi.push(context, store) }
+            }
+        }
+    }
+    val activity = LocalContext.current as Activity
+    BackHandler {
+        when {
+            drawer -> drawer = false
+            phase != null -> phase = null
+            ledger -> ledger = false
+            figure != null && tab == Tab.Ancient -> figure = null
+            tune != null && tab == Tab.Tune -> tune = null
+            rank -> rank = false
+            else -> activity.finish()
+        }
+    }
     ChengTheme {
         Box(Modifier.fillMaxSize().background(Ink.bg)) {
             Atmosphere()
             Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.systemBars)) {
-                TopMark(onMenu = { drawer = true })
+                TopMark(onDate = { ledger = true }, onMenu = { drawer = true })
                 Box(Modifier.fillMaxWidth().height(1.dp).background(Ink.line))
                 Box(Modifier.weight(1f).fillMaxWidth()) {
                     val open = phase
                     val tuning = tune
-                    if (open != null) {
+                    if (ledger) {
+                        LedgerBody(state) { ledger = false }
+                    } else if (open != null) {
                         PhaseBody(open, state, store) { phase = null }
+                    } else if (figure != null && tab == Tab.Ancient) {
+                        AncientBody(figure!!) { figure = null }
                     } else if (tuning != null && tab == Tab.Tune) {
                         TuneBody(tuning, state, store) { tune = null }
+                    } else if (rank && tab == Tab.Self) {
+                        RankPane { rank = false }
                     } else {
                         AnimatedContent(
                             targetState = tab,
@@ -74,8 +115,9 @@ fun ChengApp() {
                         ) { current ->
                             when (current) {
                                 Tab.Home -> HomePane(state) { phase = it }
+                                Tab.Ancient -> AncientIndex { figure = it }
                                 Tab.Tune -> TuneIndex(state) { tune = it }
-                                Tab.Self -> SelfPane(state, store)
+                                Tab.Self -> SelfPane(state, store) { rank = true }
                             }
                         }
                     }
@@ -85,10 +127,11 @@ fun ChengApp() {
                         onClose = { drawer = false },
                         onOpen = {
                             drawer = false
+                            ledger = false
                             phase = it
                         },
                     )
-                    if (!drawer && open == null && tune == null && tab == Tab.Home) {
+                    if (!drawer && open == null && !ledger && tune == null && tab == Tab.Home) {
                         DrawerHandle { drawer = true }
                     }
                 }
@@ -96,6 +139,9 @@ fun ChengApp() {
                     tab = it
                     phase = null
                     tune = null
+                    ledger = false
+                    figure = null
+                    rank = false
                     drawer = false
                 }
             }
@@ -121,23 +167,29 @@ private fun Atmosphere() {
 }
 
 @Composable
-private fun TopMark(onMenu: () -> Unit) {
+private fun TopMark(onDate: () -> Unit, onMenu: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
             .padding(horizontal = 22.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        InkText("澄", size = 34.sp, display = true)
-            InkText(
-            "五行养生",
-            modifier = Modifier.padding(start = 12.dp),
-            size = 13.sp,
-            color = Ink.muted,
-            spacing = 2.sp,
-        )
+        InkText("五行养生", size = 22.sp, display = true)
         Box(Modifier.weight(1f))
-        InkText(formatToday(), size = 13.sp, color = Ink.muted)
+        InkText(
+            formatToday(),
+            modifier = Modifier
+                .clickable(
+                    remember { MutableInteractionSource() },
+                    null,
+                    role = Role.Button,
+                    onClick = onDate,
+                )
+                .semantics { contentDescription = "打开日历" }
+                .padding(vertical = 6.dp),
+            size = 13.sp,
+            color = Ink.bronze,
+        )
         Box(Modifier.width(8.dp))
         Box(
             Modifier
@@ -212,6 +264,22 @@ private fun TuneBody(
         }
         Box(Modifier.weight(1f).fillMaxWidth()) {
             PhaseTune(phase, state, store)
+        }
+    }
+}
+
+@Composable
+private fun LedgerBody(state: RitualState, onBack: () -> Unit) {
+    Column(Modifier.fillMaxSize()) {
+        Row(
+            Modifier.padding(horizontal = 22.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Seal("收回", "回到首页", onBack)
+            InkText("日历", modifier = Modifier.padding(start = 14.dp), size = 16.sp, display = true)
+        }
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            LedgerPane(state)
         }
     }
 }

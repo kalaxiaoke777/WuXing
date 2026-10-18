@@ -1,0 +1,15 @@
+services:
+  api:
+    build: ./server
+    image: wuxing-api
+    container_name: wuxing-api
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./server/.env
+    volumes:
+      - wuxing-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  wuxing-data:

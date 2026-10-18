@@ -1,5 +1,8 @@
 package studio.cheng.daily.ui
 
+import android.Manifest
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -11,21 +14,30 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.health.connect.client.PermissionController
+import kotlinx.coroutines.launch
 import studio.cheng.daily.data.Phase
+import studio.cheng.daily.device.PhoneSteps
+import studio.cheng.daily.device.StepRead
 import studio.cheng.daily.data.RitualState
 import studio.cheng.daily.data.RitualStore
 import studio.cheng.daily.data.dayBurn
+import studio.cheng.daily.data.energyLine
 import studio.cheng.daily.data.dayMoves
 import studio.cheng.daily.data.daySteps
 import studio.cheng.daily.data.moveLabel
@@ -49,44 +61,61 @@ fun WoodPane(state: RitualState, store: RitualStore) {
     ) {
         PaneHeader("运动", if (moves.isEmpty()) "尚未展开" else "$burn kcal", state.notice)
         InkText(
-            "无氧、有氧、步数合成今天的消耗。按体重估算，和饮食页的摄入对在一起看缺口。",
+            "无氧、有氧、步数合成今天的消耗。缺口用饮食减去代谢，再减去这里的运动。",
             modifier = Modifier.padding(top = 8.dp),
             size = 13.sp,
             color = Ink.faint,
             line = 20.sp,
         )
+        InkText(energyLine(state), modifier = Modifier.padding(top = 6.dp), size = 13.sp, color = Ink.moss, line = 20.sp)
         MoveBlock("无氧", "$lift 分钟") {
-            Stepper(
-                value = "$lift 分钟",
-                onMinus = { lift = (lift - 5).coerceAtLeast(5) },
-                onPlus = { lift = (lift + 5).coerceAtMost(180) },
+            MeasureStepper(
+                label = "时长",
+                tenth = lift,
+                suffix = "分钟",
+                step = 5,
+                min = 5,
+                max = 180,
+                onCommit = { lift = it },
                 minusDesc = "减少无氧分钟",
                 plusDesc = "增加无氧分钟",
+                decimal = false,
             )
             Seal("记一笔", "记下无氧", { store.logMove("lift", lift) }, Modifier.padding(top = 8.dp), accent = true)
         }
         MoveBlock("有氧", "$cardio 分钟") {
-            Stepper(
-                value = "$cardio 分钟",
-                onMinus = { cardio = (cardio - 5).coerceAtLeast(5) },
-                onPlus = { cardio = (cardio + 5).coerceAtMost(180) },
+            MeasureStepper(
+                label = "时长",
+                tenth = cardio,
+                suffix = "分钟",
+                step = 5,
+                min = 5,
+                max = 180,
+                onCommit = { cardio = it },
                 minusDesc = "减少有氧分钟",
                 plusDesc = "增加有氧分钟",
+                decimal = false,
             )
             Seal("记一笔", "记下有氧", { store.logMove("cardio", cardio) }, Modifier.padding(top = 8.dp), accent = true)
         }
         MoveBlock("日常步数", "目标 ${state.stepGoal}") {
-            Stepper(
-                value = "$steps 步",
-                onMinus = { steps = (steps - 500).coerceAtLeast(500) },
-                onPlus = { steps = (steps + 500).coerceAtMost(40000) },
+            PhoneStepLine(store)
+            MeasureStepper(
+                label = "步数",
+                tenth = steps,
+                suffix = "步",
+                step = 500,
+                min = 500,
+                max = 40000,
+                onCommit = { steps = it },
                 minusDesc = "减少步数",
                 plusDesc = "增加步数",
+                decimal = false,
             )
-            Seal("记下今日", "记下今日步数", { store.logMove("steps", steps) }, Modifier.padding(top = 8.dp), accent = true)
+            Seal("手记", "手记今日步数", { store.logMove("steps", steps) }, Modifier.padding(top = 8.dp))
             val walked = daySteps(state)
             if (walked > 0) {
-                InkText("今日已记 $walked 步", modifier = Modifier.padding(top = 6.dp), size = 12.sp, color = Ink.muted)
+                InkText("今日 $walked 步", modifier = Modifier.padding(top = 6.dp), size = 12.sp, color = Ink.muted)
             }
         }
         if (moves.isNotEmpty()) {
@@ -104,6 +133,66 @@ fun WoodPane(state: RitualState, store: RitualStore) {
         }
         BranchRail(Phase.Wood, state, store)
     }
+}
+
+@Composable
+private fun PhoneStepLine(store: RitualStore) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var hint by remember { mutableStateOf("打开这一页，会读手机上今天已经走的步数。") }
+    fun apply(read: StepRead) {
+        when (read) {
+            is StepRead.Ready -> {
+                if (read.steps > 0) store.logMove("steps", read.steps, fromPhone = true)
+                else hint = "手机上今天还是 0 步"
+            }
+            StepRead.NeedPermission -> hint = "要允许读取步数"
+            StepRead.NeedSensor -> hint = "要允许活动识别，才能读计步器"
+            StepRead.NeedProvider -> hint = "先把健康数据准备好"
+            is StepRead.Failed -> hint = read.reason
+        }
+    }
+    val healthPermission = rememberLauncherForActivityResult(
+        PermissionController.createRequestPermissionResultContract(),
+    ) { granted ->
+        scope.launch {
+            if (PhoneSteps.healthPermission in granted) apply(PhoneSteps.read(context))
+            else hint = "没有允许读取步数"
+        }
+    }
+    val sensorPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        scope.launch {
+            if (granted) apply(PhoneSteps.read(context))
+            else hint = "没有活动识别权限"
+        }
+    }
+    LaunchedEffect(Unit) {
+        val read = PhoneSteps.read(context)
+        if (read is StepRead.Ready) apply(read)
+    }
+    Seal(
+        "读取手机步数",
+        "读取手机上今天的步数",
+        {
+            scope.launch {
+                when (val read = PhoneSteps.read(context)) {
+                    StepRead.NeedPermission -> healthPermission.launch(setOf(PhoneSteps.healthPermission))
+                    StepRead.NeedSensor -> sensorPermission.launch(Manifest.permission.ACTIVITY_RECOGNITION)
+                    StepRead.NeedProvider -> {
+                        hint = "健康数据还没准备好"
+                        runCatching {
+                            context.startActivity(PhoneSteps.providerIntent().addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+                        }
+                    }
+                    else -> apply(read)
+                }
+            }
+        },
+        accent = true,
+    )
+    InkText(hint, modifier = Modifier.padding(top = 8.dp), size = 12.sp, color = Ink.faint, line = 18.sp)
 }
 
 @Composable
@@ -137,22 +226,31 @@ fun SleepPane(state: RitualState, store: RitualStore) {
         )
         NightArc(hours / state.sleepGoalTenth.toFloat(), Modifier.fillMaxWidth().height(128.dp).padding(top = 8.dp))
         InkText("睡了多久", modifier = Modifier.padding(top = 8.dp), size = 12.sp, color = Ink.muted)
-        Stepper(
-            value = "${tenthText(hours)} 小时",
-            onMinus = { hours = (hours - 5).coerceAtLeast(0) },
-            onPlus = { hours = (hours + 5).coerceAtMost(140) },
+        MeasureStepper(
+            label = "时长",
+            tenth = hours,
+            suffix = "小时",
+            step = 5,
+            min = 0,
+            max = 140,
+            onCommit = { hours = it },
             minusDesc = "减少睡眠时长",
             plusDesc = "增加睡眠时长",
             modifier = Modifier.padding(top = 8.dp),
         )
         InkText("夜里起来", modifier = Modifier.padding(top = 14.dp), size = 12.sp, color = Ink.muted)
-        Stepper(
-            value = "$wakes 次",
-            onMinus = { wakes = (wakes - 1).coerceAtLeast(0) },
-            onPlus = { wakes = (wakes + 1).coerceAtMost(12) },
-            minusDesc = "减少起夜次数",
-            plusDesc = "增加起夜次数",
+        MeasureStepper(
+            label = "次数",
+            tenth = wakes,
+            suffix = "次",
+            step = 1,
+            min = 0,
+            max = 12,
+            onCommit = { wakes = it },
+            minusDesc = "减少夜醒",
+            plusDesc = "增加夜醒",
             modifier = Modifier.padding(top = 8.dp),
+            decimal = false,
         )
         val verdict = when {
             hours + 2 < state.sleepGoalTenth -> "不到 $goal 小时，收敛不足。"

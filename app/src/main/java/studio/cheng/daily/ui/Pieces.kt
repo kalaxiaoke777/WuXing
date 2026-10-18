@@ -20,7 +20,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -36,6 +38,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import studio.cheng.daily.data.tenthText
 
 @Composable
 fun InkText(
@@ -106,11 +109,125 @@ fun Stepper(
     minusDesc: String,
     plusDesc: String,
     modifier: Modifier = Modifier,
+    onEdit: (() -> Unit)? = null,
 ) {
     Row(modifier, verticalAlignment = Alignment.CenterVertically) {
         Mini("−", minusDesc, onMinus)
-        InkText(value, modifier = Modifier.padding(horizontal = 14.dp), size = 16.sp, display = true)
+        InkText(
+            value,
+            modifier = Modifier
+                .padding(horizontal = 14.dp)
+                .then(
+                    if (onEdit != null) {
+                        Modifier.clickable(
+                            remember { MutableInteractionSource() },
+                            null,
+                            role = Role.Button,
+                            onClick = onEdit,
+                        )
+                    } else {
+                        Modifier
+                    },
+                ),
+            size = 16.sp,
+            display = true,
+        )
         Mini("+", plusDesc, onPlus)
+    }
+}
+
+@Composable
+fun MeasureStepper(
+    label: String,
+    tenth: Int,
+    suffix: String,
+    step: Int,
+    min: Int,
+    max: Int,
+    onCommit: (Int) -> Unit,
+    minusDesc: String,
+    plusDesc: String,
+    modifier: Modifier = Modifier,
+    decimal: Boolean = true,
+    blankAtZero: Boolean = false,
+) {
+    var editing by remember { mutableStateOf(false) }
+    val shown = if (blankAtZero && tenth <= 0) "未填" else if (decimal) "${tenthText(tenth)} $suffix" else "$tenth $suffix"
+    Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        InkText(label, modifier = Modifier.width(64.dp), size = 14.sp, color = Ink.muted)
+        Stepper(
+        value = shown,
+        onMinus = { onCommit((tenth - step).coerceIn(if (blankAtZero) 0 else min, max)) },
+        onPlus = { onCommit((if (blankAtZero && tenth <= 0) min else tenth + step).coerceIn(if (blankAtZero) 0 else min, max)) },
+        minusDesc = minusDesc,
+        plusDesc = plusDesc,
+        modifier = Modifier,
+        onEdit = { editing = true },
+    )
+    }
+    if (editing) {
+        DecimalSheet(
+            title = shown,
+            initial = if (blankAtZero && tenth <= 0) "" else if (decimal) tenthText(tenth) else tenth.toString(),
+            onDismiss = { editing = false },
+            onCommit = { raw ->
+                val parsed = parseMeasure(raw, decimal) ?: return@DecimalSheet
+                onCommit(parsed.coerceIn(if (blankAtZero && parsed <= 0) 0 else min, max))
+                editing = false
+            },
+        )
+    }
+}
+
+fun parseMeasure(raw: String, decimal: Boolean): Int? {
+    val cleaned = raw.trim().replace('，', '.').replace(',', '.')
+    if (cleaned.isEmpty()) return if (decimal) 0 else null
+    val parts = cleaned.split('.')
+    if (parts.size > 2) return null
+    val whole = parts[0].toIntOrNull() ?: return null
+    if (!decimal) {
+        val frac = parts.getOrNull(1)?.take(1)?.toIntOrNull() ?: 0
+        return whole + if (frac >= 5) 1 else 0
+    }
+    val frac = parts.getOrNull(1)?.take(1)?.padEnd(1, '0')?.toIntOrNull() ?: 0
+    return whole * 10 + frac
+}
+
+@Composable
+private fun DecimalSheet(
+    title: String,
+    initial: String,
+    onDismiss: () -> Unit,
+    onCommit: (String) -> Unit,
+) {
+    var draft by remember { mutableStateOf(initial) }
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp)
+            .border(1.dp, Ink.line)
+            .padding(12.dp),
+    ) {
+        Column {
+            InkText(title, size = 12.sp, color = Ink.muted)
+            androidx.compose.foundation.text.BasicTextField(
+                value = draft,
+                onValueChange = { next ->
+                    val filtered = next.filter { it.isDigit() || it == '.' || it == '．' }.replace('．', '.')
+                    val dot = filtered.indexOf('.')
+                    draft = if (dot < 0) filtered.take(6) else filtered.take(dot + 2)
+                },
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                textStyle = TextStyle(color = Ink.text, fontSize = 22.sp, fontFamily = LocalDisplay.current),
+                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Decimal),
+                singleLine = true,
+                cursorBrush = androidx.compose.ui.graphics.SolidColor(Ink.bronze),
+            )
+            Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Seal("取消", "取消输入", onDismiss)
+                Seal("记下", "记下这个数", { onCommit(draft) }, accent = true)
+            }
+        }
     }
 }
 
@@ -131,7 +248,7 @@ private fun Mini(label: String, desc: String, onClick: () -> Unit) {
             .semantics { contentDescription = desc },
         contentAlignment = Alignment.Center,
     ) {
-        InkText(label, size = 18.sp)
+        InkText(label, size = 16.sp)
     }
 }
 
@@ -178,6 +295,7 @@ fun VowLine(
 
 enum class Tab(val label: String) {
     Home("首页"),
+    Ancient("觉古"),
     Tune("五行设置"),
     Self("个人"),
 }
@@ -187,7 +305,7 @@ fun IndexBar(current: Tab, onSelect: (Tab) -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
-            .padding(horizontal = 28.dp, vertical = 4.dp),
+            .padding(horizontal = 16.dp, vertical = 4.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -209,7 +327,7 @@ private fun IndexChip(tab: Tab, selected: Boolean, onClick: () -> Unit) {
     ) {
         InkText(
             tab.label,
-            size = 14.sp,
+            size = 18.sp,
             color = if (selected) Ink.text else Ink.faint,
             display = selected,
         )

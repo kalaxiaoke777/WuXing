@@ -7,3 +7,9 @@ local.properties
 captures/
 .cxx/
 .externalNativeBuild/
+server/data/
+server/**/__pycache__/
+server/.venv/
+server/.env
+keystore/
+*.jks
